@@ -10,7 +10,7 @@
  * Keys and codes are stored only as SHA-256 hashes in the Devices and Invites tabs.
  */
 
-const APP_URL = 'https://devingoodsell.github.io/baby-log/';
+const APP_URL = 'https://devingoodsell.github.io/BabyLog/';
 const OWNER_NAME = 'Devin';
 const INVITE_HOURS = 72;     // unused invite links expire after this long
 const PAIR_MINUTES = 15;     // setup codes (moving to the Home Screen app) expire after this long
