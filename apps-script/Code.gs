@@ -10,6 +10,7 @@
  * Keys and codes are stored only as SHA-256 hashes in the Devices and Invites tabs.
  */
 
+// If you fork this, change these two lines (see the README).
 const APP_URL = 'https://devingoodsell.github.io/BabyLog/';
 const OWNER_NAME = 'Devin';
 const INVITE_HOURS = 72;     // unused invite links expire after this long
@@ -397,8 +398,10 @@ function logIds_(sh) {
 /** Step 1: run once. Creates the Devices and Invites tabs. */
 function setup() {
   const ss = SpreadsheetApp.getActive();
-  const log = ss.getSheetByName(LOG);
-  if (!log) throw new Error('Missing a tab named Log');
+  let log = ss.getSheetByName(LOG);
+  if (!log) log = createLogTab_(ss);
+  if (!ss.getSheetByName('Dashboard')) buildDashboard_(ss.insertSheet('Dashboard', 0));
+  if (!ss.getSheetByName('Daily')) buildDaily_(ss.insertSheet('Daily', 2));
   if (log.getMaxColumns() < LOG_HEADERS.length) log.insertColumnsAfter(log.getMaxColumns(), LOG_HEADERS.length - log.getMaxColumns());
   log.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]);
   ensureTab_(DEVICES, DEV_HEADERS);
@@ -411,6 +414,70 @@ function createOwnerInvite() {
   setup();
   const inv = createInvite_(OWNER_NAME, 'admin', OWNER_NAME);
   Logger.log('Open this on your phone within ' + INVITE_HOURS + ' hours. It works once:\n' + inv.link);
+}
+
+/* Tabs for a brand-new sheet. setup() only creates the ones that are missing. */
+
+function createLogTab_(ss) {
+  const first = ss.getSheets()[0];
+  const blank = ss.getSheets().length === 1 && first.getLastRow() === 0;
+  const sh = blank ? first.setName(LOG) : ss.insertSheet(LOG);
+  if (sh.getMaxColumns() < LOG_HEADERS.length) sh.insertColumnsAfter(sh.getMaxColumns(), LOG_HEADERS.length - sh.getMaxColumns());
+  sh.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]).setFontWeight('bold')
+    .setBackground('#263238').setFontColor('#FFFFFF');
+  sh.setFrozenRows(1);
+  const rows = sh.getMaxRows() - 1;
+  [L.TIME, L.END, L.AT].forEach(c => sh.getRange(2, c + 1, rows, 1).setNumberFormat('ddd m/d h:mm am/pm'));
+  sh.getRange(2, L.ID + 1, rows, 1).setNumberFormat('@');
+  sh.setColumnWidths(1, 2, 150);
+  return sh;
+}
+
+function buildDashboard_(sh) {
+  const log24 = c => [`=COUNTIFS(Log!$B$2:$B,${c},Log!$A$2:$A,">="&B$13)`, `=COUNTIFS(Log!$B$2:$B,${c},Log!$A$2:$A,">="&C$13)`];
+  const sum24 = col => [`=SUMIFS(Log!$${col}$2:$${col},Log!$A$2:$A,">="&B$13)`, `=SUMIFS(Log!$${col}$2:$${col},Log!$A$2:$A,">="&C$13)`];
+  const rows = [
+    ['Baby Log', '', ''],
+    ['', '', ''],
+    ['Right now', '', ''],
+    ['Last entry logged', '=IF(COUNT(Log!J2:J)=0,"",MAX(Log!J2:J))', ''],
+    ['Last feed started', '=IFERROR(MAX(FILTER(Log!A2:A,(Log!B2:B="Breastfeed")+(Log!B2:B="Bottle"))),"")', ''],
+    ['Time since last feed started (h:mm)', '=IF(B5="","",NOW()-B5)', ''],
+    ['Last breastfeed started on', '=IFERROR(INDEX(SORT(FILTER(Log!A2:G,Log!B2:B="Breastfeed"),1,FALSE),1,6),"")', ''],
+    ['Last breastfeed ended on', '=IFERROR(INDEX(SORT(FILTER(Log!A2:G,Log!B2:B="Breastfeed"),1,FALSE),1,7),"")', ''],
+    ['Last wet diaper', '=IFERROR(MAX(FILTER(Log!A2:A,REGEXMATCH(Log!B2:B,"(?i)^wet"))),"")', ''],
+    ['Last dirty diaper', '=IFERROR(MAX(FILTER(Log!A2:A,REGEXMATCH(Log!B2:B,"(?i)dirty"))),"")', ''],
+    ['', '', ''],
+    ['Totals', 'Last 24 hours', 'Since midnight'],
+    ['Counting from', '=NOW()-1', '=TODAY()'],
+    ['Wet diapers'].concat(log24('"Wet*"')),
+    ['Dirty diapers'].concat(log24('"*dirty*"')),
+    ['Breastfeeds'].concat(log24('"Breastfeed"')),
+    ['Left breast minutes'].concat(sum24('C')),
+    ['Right breast minutes'].concat(sum24('D')),
+    ['Bottles'].concat(log24('"Bottle"')),
+    ['Bottle ounces'].concat(sum24('E')),
+    ['All feeds', '=B16+B19', '=C16+C19'],
+    ['', '', ''],
+    ['Recent entries', '', '']
+  ];
+  sh.getRange(1, 1, rows.length, 3).setValues(rows);
+  sh.getRange('A24:G24').setValues([['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side']])
+    .setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
+  sh.getRange('A25').setValue('=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER(Log!A2:G,Log!A2:A<>""),1,FALSE),12,7),"No entries yet")');
+  sh.getRange('A1').setFontSize(16).setFontWeight('bold');
+  ['A3', 'A12:C12', 'A23'].forEach(a => sh.getRange(a).setFontWeight('bold').setFontSize(12));
+  ['B4:B5', 'B9:B10', 'B13:C13', 'A25:A36'].forEach(a => sh.getRange(a).setNumberFormat('ddd m/d h:mm am/pm'));
+  sh.getRange('B6').setNumberFormat('[h]:mm');
+  sh.getRange('B4:C21').setHorizontalAlignment('right');
+  sh.setColumnWidth(1, 240); sh.setColumnWidth(2, 170); sh.setColumnWidth(3, 140);
+}
+
+function buildDaily_(sh) {
+  sh.getRange('A1').setValue(`=QUERY({ARRAYFORMULA(IF(Log!A2:A="",,TO_DATE(INT(Log!A2:A)))),ARRAYFORMULA(IF(REGEXMATCH(Log!B2:B,"(?i)^wet"),1,0)),ARRAYFORMULA(IF(REGEXMATCH(Log!B2:B,"(?i)dirty"),1,0)),ARRAYFORMULA(IF(Log!B2:B="Breastfeed",1,0)),ARRAYFORMULA(IF(Log!C2:C="",0,Log!C2:C)),ARRAYFORMULA(IF(Log!D2:D="",0,Log!D2:D)),ARRAYFORMULA(IF(Log!B2:B="Bottle",1,0)),ARRAYFORMULA(IF(Log!E2:E="",0,Log!E2:E))},"select Col1, sum(Col2), sum(Col3), sum(Col4), sum(Col5), sum(Col6), sum(Col7), sum(Col8) where Col1 is not null group by Col1 order by Col1 desc label Col1 'Date', sum(Col2) 'Wet', sum(Col3) 'Dirty', sum(Col4) 'Breastfeeds', sum(Col5) 'Left min', sum(Col6) 'Right min', sum(Col7) 'Bottles', sum(Col8) 'Bottle oz' format Col1 'ddd mmm d'",0)`);
+  sh.getRange('A1:H1').setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
+  sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 120);
 }
 
 function ensureTab_(name, headers) {
