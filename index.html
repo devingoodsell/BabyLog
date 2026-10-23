@@ -129,6 +129,12 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .item .t1 { font-weight: 800; display: flex; align-items: center; gap: 6px; }
 .item .t2 { font-size: 14px; color: var(--muted); font-weight: 600; }
 .item .pend { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); display: inline-block; }
+.item .t3 { font-size: 14px; color: var(--ink); font-weight: 600; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; opacity: .85; }
+.item .t3::before { content: "\201C"; } .item .t3::after { content: "\201D"; }
+.note-wrap { display: flex; flex-direction: column; gap: 8px; }
+.add-note { align-self: flex-start; padding: 4px 2px; color: var(--feed); }
+textarea.text { font-size: 16px; font-weight: 600; resize: vertical; min-height: 64px; line-height: 1.35; }
+.item-edit { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 12px 64px; }
 .item .when { font-size: 14px; color: var(--muted); font-weight: 700; text-align: right; flex: none; }
 .item .when small { display: block; font-size: 12px; font-weight: 600; }
 .split { display: flex; gap: 3px; margin-top: 7px; max-width: 260px; }
@@ -192,6 +198,13 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 .oz-big small { font-size: 22px; color: var(--muted); }
 .oz-row { display: flex; align-items: center; justify-content: center; gap: 22px; }
 .oz-row button { width: 58px; height: 58px; border-radius: 50%; border: 0; background: var(--bottle-soft); color: var(--bottle); font-size: 28px; font-weight: 800; }
+.oz-row button { flex: none; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+.oz-big { display: flex; align-items: baseline; justify-content: center; gap: 6px; min-width: 0; }
+.amt { font: inherit; color: inherit; background: transparent; border: 0; border-bottom: 2px dashed var(--line); text-align: center; width: 4.2ch; padding: 0; border-radius: 0; }
+.amt:focus { outline: none; border-bottom-color: var(--bottle); }
+.kinds.milk { grid-template-columns: 1fr 1fr; }
+.kinds.milk .kind { padding: 16px 8px; font-size: 16px; }
+.kinds.milk .kind[aria-pressed="true"] { border-color: var(--bottle); background: var(--bottle-soft); color: var(--bottle); }
 
 .kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .kind { border: 2px solid var(--line); background: var(--surface); border-radius: var(--r-md); padding: 16px 6px; display: flex; flex-direction: column; align-items: center; gap: 8px; font-weight: 800; color: var(--ink); }
@@ -318,12 +331,12 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <div class="section-title"><h2>Today</h2><span>since midnight</span></div>
   <section class="totals" aria-label="Today's totals">
     <div class="tot"><b class="num" id="tFeeds">0</b><span>Feeds</span><em class="num" id="tFeedMin">0 min</em></div>
-    <div class="tot"><b class="num" id="tOz">0</b><span>Oz</span><em class="num" id="tBottles">0 bottles</em></div>
+    <div class="tot"><b class="num" id="tOz">0</b><span id="tOzUnit">Oz</span><em class="num" id="tBottles">0 bottles</em></div>
     <div class="tot"><b class="num" id="tWet">0</b><span>Wet</span><em>diapers</em></div>
     <div class="tot"><b class="num" id="tDirty">0</b><span>Dirty</span><em>diapers</em></div>
   </section>
 
-  <div class="section-title"><h2>Timeline</h2><span>tap an entry to delete</span></div>
+  <div class="section-title"><h2>Timeline</h2><span>tap an entry for notes or delete</span></div>
   <section class="timeline" id="timeline" aria-label="Timeline"></section>
 </main>
 
@@ -343,6 +356,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
       <button class="side" type="button" id="sideR"><span class="tag" id="tagR" hidden>NEXT</span><span class="lr">Right</span><span class="clock num" id="clockR">0:00</span><span class="hint" id="hintR">Tap to start</span></button>
     </div>
     <div class="feed-total num" id="feedTotal">Tap the side you're starting on</div>
+    <div class="note-wrap" data-note="timer"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-timer" rows="2" maxlength="500" placeholder="Optional note, for example: spit up a little" hidden></textarea></div>
     <div class="row-actions">
       <button class="primary feed" type="button" id="feedDone" disabled>Save feed</button>
       <button class="ghost" type="button" id="feedDiscard" hidden>Discard this feed</button>
@@ -358,6 +372,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <div class="stepper"><span class="lbl">Right</span><div class="ctl"><button type="button" data-step="R" data-d="-1" aria-label="Less right">−</button><span class="val num" id="mR">10 min</span><button type="button" data-step="R" data-d="1" aria-label="More right">+</button></div></div>
     <div class="field-label">Started</div>
     <div class="chips when" data-for="manual"></div>
+    <div class="note-wrap" data-note="manual"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-manual" rows="2" maxlength="500" placeholder="Optional note, for example: spit up a little" hidden></textarea></div>
     <button class="primary feed" type="button" id="manualSave">Save feed</button>
   </div>
 </section>
@@ -366,19 +381,25 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 <section class="sheet" id="sheet-bottle" role="dialog" aria-modal="true" aria-labelledby="bottleTitle">
   <div class="grab"></div>
   <div class="sheet-head"><h3 id="bottleTitle">Bottle</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
-  <div class="oz-row">
-    <button type="button" id="ozMinus" aria-label="Less">−</button>
-    <div class="oz-big num"><span id="ozVal">2</span> <small>oz</small></div>
-    <button type="button" id="ozPlus" aria-label="More">+</button>
+  <div class="seg" role="group" aria-label="Unit">
+    <button type="button" id="unitOz" aria-pressed="true">Ounces (oz)</button>
+    <button type="button" id="unitMl" aria-pressed="false">Milliliters (mL)</button>
   </div>
-  <div class="chips" role="group" aria-label="Quick amounts" style="justify-content:center">
-    <button class="chip" type="button" data-oz="1">1 oz</button>
-    <button class="chip" type="button" data-oz="2">2 oz</button>
-    <button class="chip" type="button" data-oz="3">3 oz</button>
-    <button class="chip" type="button" data-oz="4">4 oz</button>
+  <div class="oz-row">
+    <button type="button" id="amtMinus" aria-label="Less">−</button>
+    <label class="oz-big num" for="amtInput"><input id="amtInput" class="amt" type="text" inputmode="decimal" autocomplete="off" value="2" aria-label="Amount"><small id="amtUnit">oz</small></label>
+    <button type="button" id="amtPlus" aria-label="More">+</button>
+  </div>
+  <div class="chips" id="amtChips" role="group" aria-label="Quick amounts" style="justify-content:center"></div>
+  <p class="muted" id="amtHint" style="margin:-8px 0 0;text-align:center">Hold + or − to go faster, or tap the number to type.</p>
+  <div class="field-label">Milk</div>
+  <div class="kinds milk" role="group" aria-label="Milk">
+    <button class="kind" type="button" data-source="breast" aria-pressed="false">Breast milk</button>
+    <button class="kind" type="button" data-source="formula" aria-pressed="false">Formula</button>
   </div>
   <div class="field-label">When</div>
   <div class="chips when" data-for="bottle"></div>
+  <div class="note-wrap" data-note="bottle"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-bottle" rows="2" maxlength="500" placeholder="Optional note, for example: spit up a little" hidden></textarea></div>
   <button class="primary bottle" type="button" id="bottleSave">Save bottle</button>
 </section>
 
@@ -393,6 +414,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   </div>
   <div class="field-label">When</div>
   <div class="chips when" data-for="diaper"></div>
+  <div class="note-wrap" data-note="diaper"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-diaper" rows="2" maxlength="500" placeholder="Optional note, for example: spit up a little" hidden></textarea></div>
   <button class="primary diaper" type="button" id="diaperSave" disabled>Save diaper</button>
 </section>
 

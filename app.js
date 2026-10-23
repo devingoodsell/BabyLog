@@ -5,7 +5,7 @@
   const CFG = window.BABYLOG_CONFIG || {};
   const MIN = 60000;
   const $ = id => document.getElementById(id);
-  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active' };
+  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active', PREFS: 'bl.prefs' };
 
   /* ================================================================ */
   /* Storage                                                           */
@@ -18,6 +18,8 @@
   let entries = load(K.ENTRIES, []);        // newest data we know about, including unsent entries
   let outbox = load(K.OUTBOX, []);          // [{op:'add', entry} | {op:'delete', id}]
   let active = load(K.ACTIVE, null);        // breastfeed timer on this phone
+  // This phone's bottle settings: last unit, last amount per unit, last milk
+  const prefs = Object.assign({ unit: 'oz', amount: { oz: 2, ml: 5 }, source: null }, load(K.PREFS, {}));
 
   const saveEntries = () => store(K.ENTRIES, entries);
   const saveOutbox = () => store(K.OUTBOX, outbox);
@@ -61,7 +63,7 @@
   /* ================================================================ */
   /* Sync                                                              */
   /* ================================================================ */
-  let flushing = false, online = true, lastSync = 0;
+  let flushing = false, online = true, lastSync = 0, refreshSoon = false;
 
   function setSync() {
     const el = $('sync');
@@ -86,6 +88,8 @@
             await api('add', { entry: send });
             const e = entries.find(x => x.id === op.entry.id);
             if (e) delete e.pending;
+          } else if (op.op === 'note') {
+            await api('update', { id: op.id, note: op.note });
           } else {
             await api('delete', { id: op.id });
           }
@@ -95,6 +99,7 @@
           if (err.code === 'bad_request' || err.code === 'forbidden') {
             outbox.shift(); saveOutbox();
             if (op.op === 'add') { entries = entries.filter(x => x.id !== op.entry.id); saveEntries(); }
+            if (op.op === 'note') { refreshSoon = true; }
             toast("Couldn't save: " + err.message);
             render();
             continue;
@@ -105,6 +110,7 @@
       }
     } finally {
       flushing = false; setSync(); render();
+      if (refreshSoon) { refreshSoon = false; setTimeout(refresh, 500); }
     }
   }
 
@@ -119,6 +125,7 @@
       const pendingAdds = outbox.filter(o => o.op === 'add').map(o => o.entry);
       const pendingDel = new Set(outbox.filter(o => o.op === 'delete').map(o => o.id));
       entries = server.filter(e => !pendingDel.has(e.id)).concat(pendingAdds.filter(p => !server.some(s => s.id === p.id)));
+      outbox.filter(o => o.op === 'note').forEach(o => { const e = entries.find(x => x.id === o.id); if (e) e.note = o.note; });
       saveEntries();
       online = true; lastSync = Date.now();
     } catch (err) {
@@ -147,6 +154,7 @@
   function removeEntry(id, opts) {
     const e = entries.find(x => x.id === id);
     entries = entries.filter(x => x.id !== id);
+    outbox = outbox.filter((o, n) => !(o.op === 'note' && o.id === id && !(flushing && n === 0)));
     const i = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
     if (i > 0 || (i === 0 && !flushing)) outbox.splice(i, 1);
     else outbox.push({ op: 'delete', id: id });
@@ -155,6 +163,24 @@
     if (e && !(opts && opts.quiet)) {
       toast('Entry deleted', () => { const copy = Object.assign({}, e); delete copy.pending; addEntry(copy, { quiet: true }); });
     }
+    flush();
+  }
+
+  function updateNote(id, note) {
+    note = String(note || '').trim().slice(0, 500);
+    const e = entries.find(x => x.id === id);
+    if (!e) return;
+    const before = e.note || '';
+    e.note = note;
+    const pendingAdd = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
+    if (pendingAdd > 0 || (pendingAdd === 0 && !flushing)) outbox[pendingAdd].entry.note = note;
+    else {
+      outbox = outbox.filter((o, n) => !(o.op === 'note' && o.id === id && !(flushing && n === 0)));
+      outbox.push({ op: 'note', id: id, note: note });
+    }
+    editingNote = null; openItem = null;
+    saveEntries(); saveOutbox(); render(); setSync();
+    toast(note ? 'Note saved' : 'Note removed', () => updateNote(id, before));
     flush();
   }
 
@@ -175,6 +201,14 @@
   const sideName = s => (s === 'L' ? 'Left' : 'Right');
   const other = s => (s === 'L' ? 'R' : 'L');
   const kindName = { wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' };
+  const MILK = { breast: 'Breast milk', formula: 'Formula' };
+  const ML_PER_OZ = 29.5735;
+  const fmtAmt = (v, unit) => String(unit === 'ml' ? +Number(v).toFixed(1) : +Number(v).toFixed(2));
+  function amountText(e) {
+    const unit = e.unit === 'ml' ? 'ml' : 'oz';
+    const amt = e.amount != null ? e.amount : e.oz;
+    return fmtAmt(amt, unit) + (unit === 'ml' ? ' mL' : ' oz');
+  }
   const sideMin = (e, s) => (s === 'L' ? (e.left || 0) : (e.right || 0));
   const initial = n => (String(n || '?').trim()[0] || '?').toUpperCase();
 
@@ -205,14 +239,14 @@
         : sideName(e.left > 0 ? 'L' : e.right > 0 ? 'R' : e.first) + ' only · ' + total + ' min';
       return { icon: 'feed', cls: 'i-feed', t1: 'Breastfeed', t2: t2 + by };
     }
-    if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: e.oz + ' oz' + by };
+    if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: amountText(e) + (e.source ? ' · ' + MILK[e.source] : '') + by };
     return { icon: e.kind, cls: 'i-diaper', t1: kindName[e.kind] + ' diaper', t2: 'Diaper' + by };
   }
 
   /* ================================================================ */
   /* Home render                                                       */
   /* ================================================================ */
-  let openItem = null;
+  let openItem = null, editingNote = null;
 
   function render() {
     if (!auth || $('screen-home').hidden) return;
@@ -227,7 +261,7 @@
     if (lastFeed) {
       $('lastFeedAgo').textContent = ago(lastFeed.t);
       $('lastFeedSub').textContent = lastFeed.type === 'bottle'
-        ? 'Bottle ' + lastFeed.oz + ' oz at ' + fmtTime(lastFeed.t)
+        ? 'Bottle ' + amountText(lastFeed) + (lastFeed.source ? ' ' + MILK[lastFeed.source].toLowerCase() : '') + ' at ' + fmtTime(lastFeed.t)
         : sideParts(lastFeed) + ' at ' + fmtTime(lastFeed.t);
     } else { $('lastFeedAgo').textContent = 'None yet'; $('lastFeedSub').textContent = 'Tap Breastfeed or Bottle to log one'; }
     const next = lastBreast ? other(lastBreast.last) : null;
@@ -245,11 +279,15 @@
     const bottles = today.filter(e => e.type === 'bottle');
     $('tFeeds').textContent = today.filter(e => e.type !== 'diaper').length;
     $('tFeedMin').textContent = breastMin + ' min';
-    $('tOz').textContent = +bottles.reduce((s, e) => s + (e.oz || 0), 0).toFixed(2);
+    const totalOz = bottles.reduce((s, e) => s + (e.oz || 0), 0);
+    $('tOz').textContent = prefs.unit === 'ml' ? Math.round(totalOz * ML_PER_OZ) : +totalOz.toFixed(1);
+    $('tOzUnit').textContent = prefs.unit === 'ml' ? 'mL' : 'Oz';
     $('tBottles').textContent = bottles.length + (bottles.length === 1 ? ' bottle' : ' bottles');
     $('tWet').textContent = today.filter(e => e.kind === 'wet' || e.kind === 'both').length;
     $('tDirty').textContent = today.filter(e => e.kind === 'dirty' || e.kind === 'both').length;
 
+    // Don't rebuild the timeline under someone who is typing a note
+    if (editingNote && $('edit-note')) { renderLive(); return; }
     const tl = $('timeline');
     tl.textContent = '';
     if (!sorted.length) {
@@ -273,6 +311,7 @@
       b.querySelector('.t1').textContent = d.t1;
       if (e.pending) { const p = document.createElement('span'); p.className = 'pend'; p.title = 'Not saved to the sheet yet'; b.querySelector('.t1').appendChild(p); }
       b.querySelector('.t2').textContent = d.t2;
+      if (e.note) { const n = document.createElement('div'); n.className = 't3'; n.textContent = e.note; b.querySelector('.txt').appendChild(n); }
       const whenEl = b.querySelector('.when');
       whenEl.textContent = fmtTime(e.t);
       if (e.type === 'breast') {
@@ -280,15 +319,29 @@
         if (tot) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + tot * MIN); whenEl.appendChild(sm); }
         b.querySelector('.txt').appendChild(splitBar(e));
       }
-      b.addEventListener('click', () => { openItem = openItem === e.id ? null : e.id; render(); });
+      b.addEventListener('click', () => { openItem = openItem === e.id ? null : e.id; editingNote = null; render(); });
       wrap.appendChild(b);
-      if (openItem === e.id) {
+      if (openItem === e.id && editingNote === e.id) {
+        const box = document.createElement('div'); box.className = 'item-edit';
+        const ta = document.createElement('textarea'); ta.className = 'text'; ta.id = 'edit-note'; ta.rows = 3; ta.maxLength = 500;
+        ta.placeholder = 'Add a note'; ta.value = e.note || '';
+        const row = document.createElement('div'); row.className = 'item-tools'; row.style.padding = '0';
+        const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save note';
+        save.style.color = 'var(--feed)';
+        save.addEventListener('click', () => updateNote(e.id, ta.value));
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => { editingNote = null; render(); });
+        row.append(save, cancel); box.append(ta, row); wrap.appendChild(box);
+        setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+      } else if (openItem === e.id) {
         const tools = document.createElement('div'); tools.className = 'item-tools';
+        const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = e.note ? 'Edit note' : 'Add note';
+        edit.addEventListener('click', () => { editingNote = e.id; render(); });
         const del = document.createElement('button'); del.type = 'button'; del.className = 'del'; del.textContent = 'Delete';
         del.addEventListener('click', () => removeEntry(e.id));
         const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
         cancel.addEventListener('click', () => { openItem = null; render(); });
-        tools.append(del, cancel); wrap.appendChild(tools);
+        tools.append(edit, del, cancel); wrap.appendChild(tools);
       }
       tl.appendChild(wrap);
     });
@@ -314,8 +367,10 @@
   function open(name) {
     closeSheet();
     openSheet = $('sheet-' + name);
-    if (name === 'diaper') resetDiaper();
-    if (name === 'bottle') setWhen('bottle', 0);
+    if (name === 'diaper') { resetDiaper(); resetNote('diaper'); }
+    if (name === 'bottle') resetNote('bottle');
+    if (name === 'feed') { resetNote('manual'); resetNote('timer', active && active.note); }
+    if (name === 'bottle') { setWhen('bottle', 0); setUnit(prefs.unit); setSource(prefs.source); }
     if (name === 'feed') { setWhen('manual', 20); renderTimer(); }
     if (name === 'settings') renderSettings();
     $('scrim').classList.add('open'); openSheet.classList.add('open');
@@ -363,6 +418,21 @@
   const whenOf = key => whenState[key] || Date.now();
 
   /* ================================================================ */
+  /* Optional notes on new entries                                     */
+  /* ================================================================ */
+  document.querySelectorAll('.note-wrap').forEach(w => {
+    const btn = w.querySelector('.add-note'), ta = w.querySelector('textarea');
+    btn.addEventListener('click', () => { btn.hidden = true; ta.hidden = false; ta.focus(); });
+    if (w.dataset.note === 'timer') ta.addEventListener('input', () => { if (active) { active.note = ta.value; saveActive(); } });
+  });
+  function resetNote(key, value) {
+    const w = document.querySelector('.note-wrap[data-note="' + key + '"]');
+    const ta = w.querySelector('textarea'), btn = w.querySelector('.add-note');
+    ta.value = value || ''; ta.hidden = !value; btn.hidden = !!value;
+  }
+  const noteOf = key => $('note-' + key).value.trim();
+
+  /* ================================================================ */
   /* Breastfeed timer                                                  */
   /* ================================================================ */
   function sideMs(a, s) {
@@ -374,7 +444,7 @@
     const now = Date.now();
     const a = active;
     if (!a) {
-      active = { start: now, first: s, side: s, running: true, segStart: now, left: 0, right: 0 };
+      active = { start: now, first: s, side: s, running: true, segStart: now, left: 0, right: 0, note: $('note-timer').value };
     } else if (a.side === s && a.running) {
       if (s === 'L') a.left += now - a.segStart; else a.right += now - a.segStart;
       a.running = false;
@@ -428,10 +498,10 @@
     active = null; saveActive();
     const first = left && right ? a.first : (left ? 'L' : 'R');
     const last = left && right ? a.side : first;
-    addEntry({ type: 'breast', t: a.start, left: left, right: right, first: first, last: last });
+    addEntry({ type: 'breast', t: a.start, left: left, right: right, first: first, last: last, note: noteOf('timer') });
     closeSheet();
   });
-  $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); renderTimer(); renderLive(); toast('Feed discarded'); });
+  $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); resetNote('timer'); renderTimer(); renderLive(); toast('Feed discarded'); });
   setInterval(() => { if (active) { renderLive(); if (openSheet === $('sheet-feed')) renderTimer(); } }, 1000);
 
   /* Manual feed */
@@ -459,17 +529,102 @@
     const only = manual.L ? 'L' : 'R';
     const first = both ? manual.first : only;
     const last = both ? other(manual.first) : only;
-    addEntry({ type: 'breast', t: whenOf('manual'), left: manual.L, right: manual.R, first: first, last: last });
+    addEntry({ type: 'breast', t: whenOf('manual'), left: manual.L, right: manual.R, first: first, last: last, note: noteOf('manual') });
     closeSheet();
   });
 
-  /* Bottle */
-  let oz = 2;
-  const setOz = v => { oz = Math.max(0.5, Math.min(10, Math.round(v * 2) / 2)); $('ozVal').textContent = oz; };
-  $('ozMinus').addEventListener('click', () => setOz(oz - 0.5));
-  $('ozPlus').addEventListener('click', () => setOz(oz + 0.5));
-  document.querySelectorAll('[data-oz]').forEach(c => c.addEventListener('click', () => setOz(Number(c.dataset.oz))));
-  $('bottleSave').addEventListener('click', () => { addEntry({ type: 'bottle', t: whenOf('bottle'), oz: oz }); closeSheet(); });
+  /* Bottle (or syringe): ounces or mL, plus milk source */
+  const UNITS = {
+    oz: { step: 0.5, min: 0.25, max: 12, chips: [1, 2, 3, 4], label: 'oz' },
+    ml: { step: 0.1, min: 0.1, max: 360, chips: [1, 3, 5, 10, 30, 60], label: 'mL' }
+  };
+  let unit = 'oz', amount = 2, source = null;
+  const savePrefs = () => store(K.PREFS, prefs);
+  const clampAmt = v => {
+    const u = UNITS[unit];
+    const r = unit === 'ml' ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100;
+    return Math.max(u.min, Math.min(u.max, r));
+  };
+  function showAmount() {
+    const el = $('amtInput');
+    const txt = fmtAmt(amount, unit);
+    if (document.activeElement !== el) el.value = txt;
+    el.style.width = Math.max(2, el.value.length) + 0.4 + 'ch';
+    document.querySelectorAll('#amtChips .chip').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.amt) === amount)));
+  }
+  function setAmount(v) { if (!isFinite(v)) return; amount = clampAmt(v); showAmount(); }
+  function setUnit(u) {
+    unit = u === 'ml' ? 'ml' : 'oz';
+    prefs.unit = unit; savePrefs();
+    $('unitOz').setAttribute('aria-pressed', String(unit === 'oz'));
+    $('unitMl').setAttribute('aria-pressed', String(unit === 'ml'));
+    $('amtUnit').textContent = UNITS[unit].label;
+    const box = $('amtChips'); box.textContent = '';
+    UNITS[unit].chips.forEach(v => {
+      const c = document.createElement('button'); c.type = 'button'; c.className = 'chip';
+      c.dataset.amt = v; c.textContent = v + ' ' + UNITS[unit].label;
+      c.addEventListener('click', () => setAmount(v));
+      box.appendChild(c);
+    });
+    amount = clampAmt(Number(prefs.amount && prefs.amount[unit]) || (unit === 'ml' ? 5 : 2));
+    showAmount();
+    render();
+  }
+  function setSource(src) {
+    source = src === 'breast' || src === 'formula' ? src : null;
+    document.querySelectorAll('[data-source]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.source === source)));
+    $('bottleSave').disabled = !source;
+    $('bottleSave').textContent = source ? 'Save bottle' : 'Choose breast milk or formula';
+  }
+  $('unitOz').addEventListener('click', () => setUnit('oz'));
+  $('unitMl').addEventListener('click', () => setUnit('ml'));
+  document.querySelectorAll('[data-source]').forEach(b => b.addEventListener('click', () => setSource(b.dataset.source)));
+
+  // Typing an amount
+  $('amtInput').addEventListener('input', e => {
+    const el = e.target;
+    el.value = el.value.replace(',', '.').replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+    el.style.width = Math.max(2, el.value.length) + 0.4 + 'ch';
+    const v = parseFloat(el.value);
+    if (isFinite(v) && v > 0) amount = clampAmt(v);
+  });
+  $('amtInput').addEventListener('focus', e => setTimeout(() => e.target.select(), 0));
+  $('amtInput').addEventListener('blur', showAmount);
+  $('amtInput').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+
+  // + and -: tap for one step, hold to repeat (speeds up the longer you hold)
+  function bindStepper(btn, dir) {
+    let timer = null, delay = 0;
+    const stop = () => { clearTimeout(timer); timer = null; };
+    const tick = () => {
+      setAmount(amount + dir * UNITS[unit].step);
+      delay = Math.max(40, delay * 0.85);
+      timer = setTimeout(tick, delay);
+    };
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      $('amtInput').blur();
+      setAmount(amount + dir * UNITS[unit].step);
+      delay = 140;
+      timer = setTimeout(tick, 420);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, stop));
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+    btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAmount(amount + dir * UNITS[unit].step); } });
+  }
+  bindStepper($('amtMinus'), -1);
+  bindStepper($('amtPlus'), 1);
+
+  $('bottleSave').addEventListener('click', () => {
+    const v = parseFloat($('amtInput').value);
+    if (isFinite(v) && v > 0) amount = clampAmt(v);
+    if (!source) return;
+    prefs.amount = Object.assign({}, prefs.amount, { [unit]: amount });
+    prefs.source = source; savePrefs();
+    const oz = unit === 'ml' ? Math.round(amount / ML_PER_OZ * 100) / 100 : amount;
+    addEntry({ type: 'bottle', t: whenOf('bottle'), amount: amount, unit: unit, oz: oz, source: source, note: noteOf('bottle') });
+    closeSheet();
+  });
 
   /* Diaper */
   let kind = null;
@@ -482,7 +637,7 @@
     kind = k.dataset.kind; $('diaperSave').disabled = false;
     document.querySelectorAll('[data-kind]').forEach(x => x.setAttribute('aria-pressed', String(x === k)));
   }));
-  $('diaperSave').addEventListener('click', () => { if (!kind) return; addEntry({ type: 'diaper', t: whenOf('diaper'), kind: kind }); closeSheet(); });
+  $('diaperSave').addEventListener('click', () => { if (!kind) return; addEntry({ type: 'diaper', t: whenOf('diaper'), kind: kind, note: noteOf('diaper') }); closeSheet(); });
 
   /* ================================================================ */
   /* Small DOM helper                                                  */

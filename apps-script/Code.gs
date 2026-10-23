@@ -22,12 +22,14 @@ const DEVICES = 'Devices';
 const INVITES = 'Invites';
 
 const LOG_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
-  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID'];
+  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk'];
+const ML_PER_OZ = 29.5735;
 const DEV_HEADERS = ['Name', 'Role', 'Status', 'Created', 'Last used', 'Device ID', 'Invited by', 'Key hash'];
 const INV_HEADERS = ['Name', 'Role', 'Kind', 'Status', 'Created', 'Expires', 'Used at', 'Device ID', 'Invite ID', 'Created by', 'Code hash'];
 
 // Log column positions (0-based)
-const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11 };
+const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14 };
+const MILK = { breast: 'Breast milk', formula: 'Formula' };
 // Devices column positions
 const D = { NAME: 0, ROLE: 1, STATUS: 2, CREATED: 3, USED: 4, ID: 5, BY: 6, HASH: 7 };
 // Invites column positions
@@ -66,6 +68,7 @@ function handle_(req) {
     case 'list': return { me: publicMe_(dev), entries: list_() };
     case 'add': return withLock_(() => add_(dev, req.entry));
     case 'delete': return withLock_(() => remove_(req.id));
+    case 'update': return withLock_(() => updateNote_(req.id, req.note));
     case 'pair': return withLock_(() => pair_(dev));
     case 'invite': requireAdmin_(dev); return withLock_(() => invite_(dev, req.name, req.role));
     case 'people': requireAdmin_(dev); return people_(dev);
@@ -255,6 +258,7 @@ function setDeviceStatus_(deviceId, status) {
 
 function add_(dev, e) {
   const entry = validateEntry_(e);
+  entry.note = cleanNote_(e && e.note);
   const sh = sheet_(LOG);
   const ids = logIds_(sh);
   if (ids.indexOf(entry.id) !== -1) return { entry: entry, duplicate: true };
@@ -264,6 +268,7 @@ function add_(dev, e) {
   row[L.BY] = dev.name;
   row[L.AT] = new Date();
   row[L.ID] = entry.id;
+  row[L.NOTES] = safeCell_(entry.note);
   if (entry.type === 'breast') {
     row[L.EVENT] = 'Breastfeed';
     row[L.LEFT] = entry.left;
@@ -273,7 +278,10 @@ function add_(dev, e) {
     row[L.END] = new Date(entry.t + (entry.left + entry.right) * 60000);
   } else if (entry.type === 'bottle') {
     row[L.EVENT] = 'Bottle';
-    row[L.OZ] = entry.oz;
+    row[L.OZ] = entry.oz;            // always ounces, so sheet totals add up
+    row[L.AMOUNT] = entry.amount;    // exactly as entered
+    row[L.UNIT] = entry.unit === 'ml' ? 'mL' : 'oz';
+    row[L.MILK] = MILK[entry.source] || '';
   } else {
     row[L.EVENT] = DIAPER_EVENTS[entry.kind];
   }
@@ -299,9 +307,14 @@ function validateEntry_(e) {
     return { id: id, type: 'breast', t: t, left: left, right: right, first: e.first, last: e.last };
   }
   if (e.type === 'bottle') {
-    const oz = Math.round(Number(e.oz) * 100) / 100;
-    if (!(oz > 0 && oz <= 20)) throw bad('Ounces must be between 0 and 20');
-    return { id: id, type: 'bottle', t: t, oz: oz };
+    const unit = e.unit === 'ml' ? 'ml' : 'oz';
+    const raw = Number(e.amount != null ? e.amount : e.oz);
+    const amount = unit === 'ml' ? Math.round(raw * 10) / 10 : Math.round(raw * 100) / 100;
+    if (unit === 'ml' && !(amount >= 0.1 && amount <= 500)) throw bad('mL must be between 0.1 and 500');
+    if (unit === 'oz' && !(amount > 0 && amount <= 20)) throw bad('Ounces must be between 0 and 20');
+    const oz = unit === 'ml' ? Math.round(amount / ML_PER_OZ * 100) / 100 : amount;
+    const source = MILK[e.source] ? e.source : '';
+    return { id: id, type: 'bottle', t: t, oz: oz, amount: amount, unit: unit, source: source };
   }
   if (e.type === 'diaper') {
     if (!DIAPER_EVENTS[e.kind]) throw bad('Unknown diaper type');
@@ -314,7 +327,8 @@ function list_() {
   const sh = sheet_(LOG);
   const last = sh.getLastRow();
   if (last < 2) return [];
-  const rows = sh.getRange(2, 1, last - 1, LOG_HEADERS.length).getValues();
+  const cols = Math.min(LOG_HEADERS.length, sh.getMaxColumns());
+  const rows = sh.getRange(2, 1, last - 1, cols).getValues();
   const since = Date.now() - LIST_DAYS * 86400000;
   const out = [];
   rows.forEach((r, i) => {
@@ -332,7 +346,7 @@ function list_() {
 }
 
 function rowToEntry_(r) {
-  const base = { id: String(r[L.ID] || ''), t: r[L.TIME].getTime(), by: String(r[L.BY] || '') };
+  const base = { id: String(r[L.ID] || ''), t: r[L.TIME].getTime(), by: String(r[L.BY] || ''), note: String(r[L.NOTES] || '') };
   const ev = String(r[L.EVENT]).trim();
   const sideOf = v => (/^r/i.test(String(v)) ? 'R' : /^l/i.test(String(v)) ? 'L' : '');
   if (ev === 'Breastfeed') {
@@ -341,7 +355,14 @@ function rowToEntry_(r) {
     const last = sideOf(r[L.LAST]) || (left && right ? (first === 'L' ? 'R' : 'L') : first);
     return Object.assign(base, { type: 'breast', left: left, right: right, first: first, last: last });
   }
-  if (ev === 'Bottle') return Object.assign(base, { type: 'bottle', oz: Number(r[L.OZ]) || 0 });
+  if (ev === 'Bottle') {
+    const oz = Number(r[L.OZ]) || 0;
+    const unit = /ml/i.test(String(r[L.UNIT] || '')) ? 'ml' : 'oz';
+    const amount = Number(r[L.AMOUNT]) || (unit === 'ml' ? Math.round(oz * ML_PER_OZ * 10) / 10 : oz);
+    const milk = String(r[L.MILK] || '');
+    const source = /formula/i.test(milk) ? 'formula' : /breast/i.test(milk) ? 'breast' : '';
+    return Object.assign(base, { type: 'bottle', oz: oz, amount: amount, unit: unit, source: source });
+  }
   for (const k in DIAPER_EVENTS) if (DIAPER_EVENTS[k] === ev) return Object.assign(base, { type: 'diaper', kind: k });
   return null;
 }
@@ -352,6 +373,15 @@ function remove_(id) {
   const i = ids.indexOf(String(id));
   if (i !== -1) sh.deleteRow(i + 2);
   return {};
+}
+
+function updateNote_(id, note) {
+  const sh = sheet_(LOG);
+  const i = logIds_(sh).indexOf(String(id));
+  if (i === -1) throw fail_('bad_request', 'That entry no longer exists.');
+  const clean = cleanNote_(note);
+  sh.getRange(i + 2, L.NOTES + 1).setValue(safeCell_(clean));
+  return { id: String(id), note: clean };
 }
 
 function logIds_(sh) {
@@ -433,7 +463,16 @@ function randomHex_(len) {
 }
 
 function cleanName_(n) {
-  return String(n || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 40);
+  return String(n || '').replace(/[\u0000-\u001f<>]/g, '').trim().replace(/^[=+\-@]+/, '').trim().slice(0, 40);
+}
+
+function cleanNote_(n) {
+  return String(n || '').replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim().slice(0, 500);
+}
+
+// Text starting with = + - or @ would become a formula in the sheet; store it as plain text.
+function safeCell_(s) {
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
 }
 
 function fail_(code, message) {
