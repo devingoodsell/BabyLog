@@ -5,7 +5,7 @@ A phone app for logging a newborn's feeds and diapers, shared by everyone who ca
 - **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact. Records which side you started and ended on.
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
-- **Pumping:** left, right or both, minutes, and an optional storage label (for example, "Bag 12").
+- **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Works offline:** entries wait on the phone and save when it reconnects.
@@ -168,6 +168,7 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
 | ID | Used by the app. Leave it alone. |
 | Amount, Unit, Milk | The bottle amount exactly as entered, `oz` or `mL`, and `Breast milk` or `Formula` |
 | Pump side, Pump min, Label | `Left`, `Right` or `Both`, pumping minutes, and the optional storage label. Pump minutes are kept separate from the breastfeed columns so feeding totals stay accurate. |
+| Left pumped, Right pumped, Pump unit, Pumped oz | Amount from each breast as entered, `oz` or `mL`, and the total converted to ounces so it can be summed. Empty when no amount was entered. |
 
 You can fix a value by hand in the sheet. The app picks up the change on its next refresh. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
 

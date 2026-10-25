@@ -203,6 +203,24 @@
   const kindName = { wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' };
   const MILK = { breast: 'Breast milk', formula: 'Formula' };
   const PUMP_SIDE = { L: 'Left', R: 'Right', B: 'Both sides' };
+  // "L 2 oz, R 1.5 oz" for both sides, "2 oz" for one side, '' when nothing was measured
+  function pumpAmtText(e) {
+    const u = e.pumpUnit === 'ml' ? 'ml' : 'oz', lab = u === 'ml' ? ' mL' : ' oz';
+    const f = v => fmtAmt(v, u) + lab;
+    if (e.side === 'B') {
+      const parts = [];
+      if (e.leftAmt != null) parts.push('L ' + f(e.leftAmt));
+      if (e.rightAmt != null) parts.push('R ' + f(e.rightAmt));
+      return parts.join(', ');
+    }
+    const v = e.side === 'L' ? e.leftAmt : e.rightAmt;
+    return v != null ? f(v) : '';
+  }
+  function pumpTotalText(e) {
+    if (e.leftAmt == null && e.rightAmt == null) return '';
+    const u = e.pumpUnit === 'ml' ? 'ml' : 'oz';
+    return fmtAmt((e.leftAmt || 0) + (e.rightAmt || 0), u) + (u === 'ml' ? ' mL' : ' oz');
+  }
   const ML_PER_OZ = 29.5735;
   const fmtAmt = (v, unit) => String(unit === 'ml' ? +Number(v).toFixed(1) : +Number(v).toFixed(2));
   function amountText(e) {
@@ -240,7 +258,7 @@
         : sideName(e.left > 0 ? 'L' : e.right > 0 ? 'R' : e.first) + ' only · ' + total + ' min';
       return { icon: 'feed', cls: 'i-feed', t1: 'Breastfeed', t2: t2 + by };
     }
-    if (e.type === 'pump') return { icon: 'pump', cls: 'i-pump', t1: 'Pump', t2: PUMP_SIDE[e.side] + ' · ' + e.minutes + ' min' + (e.label ? ' · ' + e.label : '') + by };
+    if (e.type === 'pump') return { icon: 'pump', cls: 'i-pump', t1: 'Pump', t2: PUMP_SIDE[e.side] + ' · ' + e.minutes + ' min' + (pumpAmtText(e) ? ' · ' + pumpAmtText(e) : '') + (e.label ? ' · ' + e.label : '') + by };
     if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: amountText(e) + (e.source ? ' · ' + MILK[e.source] : '') + by };
     return { icon: e.kind, cls: 'i-diaper', t1: kindName[e.kind] + ' diaper', t2: 'Diaper' + by };
   }
@@ -279,7 +297,7 @@
     if (lastEmpty) {
       $('lastEmptyAgo').textContent = ago(lastEmpty.t);
       $('lastEmptySub').textContent = lastEmpty.type === 'pump'
-        ? 'Pump, ' + PUMP_SIDE[lastEmpty.side].toLowerCase() + ', ' + lastEmpty.minutes + ' min at ' + fmtTime(lastEmpty.t)
+        ? 'Pump, ' + PUMP_SIDE[lastEmpty.side].toLowerCase() + ', ' + lastEmpty.minutes + ' min' + (pumpTotalText(lastEmpty) ? ', ' + pumpTotalText(lastEmpty) : '') + ' at ' + fmtTime(lastEmpty.t)
         : 'Breastfeed: ' + sideParts(lastEmpty).toLowerCase() + ' at ' + fmtTime(lastEmpty.t);
     } else { $('lastEmptyAgo').textContent = 'None yet'; $('lastEmptySub').textContent = 'Tap Pump or Breastfeed to log one'; }
 
@@ -644,13 +662,79 @@
     document.querySelectorAll('[data-pside]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pside === pumpSide)));
     $('pumpSave').disabled = !pumpSide;
     $('pumpSave').textContent = pumpSide ? 'Save pump' : 'Choose a side';
+    ['pAmtTitle', 'pUnitSeg'].forEach(id => { $(id).hidden = !pumpSide; });
+    $('pAmtRowL').hidden = !(pumpSide === 'L' || pumpSide === 'B');
+    $('pAmtRowR').hidden = !(pumpSide === 'R' || pumpSide === 'B');
+    showPumpTotal();
   }
+  // Amount pumped per breast (optional). oz steps by 0.25, mL by 1; both can be typed.
+  const PUMP_UNITS = { oz: { step: 0.25, max: 20, label: 'oz' }, ml: { step: 1, max: 600, label: 'mL' } };
+  let pumpUnit = 'oz', pAmt = { L: null, R: null };
+  const roundPU = v => (pumpUnit === 'ml' ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100);
+  function showPA(sd) {
+    const el = $('pAmt' + sd);
+    if (document.activeElement !== el) el.value = pAmt[sd] == null ? '' : fmtAmt(pAmt[sd], pumpUnit);
+    el.style.width = Math.max(3, el.value.length + 0.6) + 'ch';
+    showPumpTotal();
+  }
+  function setPA(sd, v) {
+    pAmt[sd] = v == null || !isFinite(v) ? null : Math.max(0, Math.min(PUMP_UNITS[pumpUnit].max, roundPU(v)));
+    showPA(sd);
+  }
+  function stepPA(sd, dir) {
+    const cur = pAmt[sd] == null ? 0 : pAmt[sd];
+    const next = cur + dir * PUMP_UNITS[pumpUnit].step;
+    setPA(sd, next <= 0 && dir < 0 ? null : next);
+  }
+  function showPumpTotal() {
+    const box = $('pAmtTotal');
+    const both = pumpSide === 'B' && pAmt.L != null && pAmt.R != null;
+    box.hidden = !both;
+    if (both) box.textContent = 'Total ' + fmtAmt(pAmt.L + pAmt.R, pumpUnit) + ' ' + PUMP_UNITS[pumpUnit].label;
+  }
+  function setPumpUnit(u) {
+    const next = u === 'ml' ? 'ml' : 'oz';
+    if (next !== pumpUnit) ['L', 'R'].forEach(sd => {
+      if (pAmt[sd] != null) pAmt[sd] = next === 'ml' ? Math.round(pAmt[sd] * ML_PER_OZ) : Math.round(pAmt[sd] / ML_PER_OZ * 4) / 4;
+    });
+    pumpUnit = next;
+    $('pUnitOz').setAttribute('aria-pressed', String(pumpUnit === 'oz'));
+    $('pUnitMl').setAttribute('aria-pressed', String(pumpUnit === 'ml'));
+    document.querySelectorAll('#sheet-pump .pu').forEach(x => { x.textContent = PUMP_UNITS[pumpUnit].label; });
+    showPA('L'); showPA('R');
+  }
+  function readPumpInputs() {
+    ['L', 'R'].forEach(sd => {
+      const raw = $('pAmt' + sd).value.trim();
+      setPA(sd, raw === '' ? null : parseFloat(raw));
+    });
+  }
+  $('pUnitOz').addEventListener('click', () => setPumpUnit('oz'));
+  $('pUnitMl').addEventListener('click', () => setPumpUnit('ml'));
+  ['L', 'R'].forEach(sd => {
+    const el = $('pAmt' + sd);
+    el.addEventListener('input', () => {
+      el.value = el.value.replace(',', '.').replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+      el.style.width = Math.max(3, el.value.length + 0.6) + 'ch';
+      const v = parseFloat(el.value);
+      pAmt[sd] = el.value === '' ? null : isFinite(v) ? Math.min(PUMP_UNITS[pumpUnit].max, roundPU(v)) : pAmt[sd];
+      showPumpTotal();
+    });
+    el.addEventListener('focus', () => setTimeout(() => el.select(), 0));
+    el.addEventListener('blur', () => showPA(sd));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') el.blur(); });
+    holdRepeat($('pAmt' + sd + 'Minus'), () => stepPA(sd, -1));
+    holdRepeat($('pAmt' + sd + 'Plus'), () => stepPA(sd, 1));
+  });
+
   function resetPump() {
     setPumpSide(prefs.pumpSide);
     setPumpMin(prefs.pumpMin || 15);
     setWhen('pump', 0);
     $('pumpLabel').value = '';
     resetNote('pump');
+    pAmt = { L: null, R: null };
+    setPumpUnit(prefs.pumpUnit || prefs.unit || 'oz');
   }
   document.querySelectorAll('[data-pside]').forEach(b => b.addEventListener('click', () => setPumpSide(b.dataset.pside)));
   document.querySelectorAll('[data-pmin]').forEach(c => c.addEventListener('click', () => setPumpMin(Number(c.dataset.pmin))));
@@ -659,7 +743,10 @@
   $('pumpSave').addEventListener('click', () => {
     if (!pumpSide) return;
     prefs.pumpSide = pumpSide; prefs.pumpMin = pumpMin; savePrefs();
-    addEntry({ type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump') });
+    readPumpInputs();
+    prefs.pumpUnit = pumpUnit; savePrefs();
+    addEntry({ type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump'),
+      leftAmt: pumpSide !== 'R' ? pAmt.L : null, rightAmt: pumpSide !== 'L' ? pAmt.R : null, pumpUnit: pumpUnit });
     closeSheet();
   });
 

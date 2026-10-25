@@ -23,13 +23,13 @@ const DEVICES = 'Devices';
 const INVITES = 'Invites';
 
 const LOG_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
-  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label'];
+  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label', 'Left pumped', 'Right pumped', 'Pump unit', 'Pumped oz'];
 const ML_PER_OZ = 29.5735;
 const DEV_HEADERS = ['Name', 'Role', 'Status', 'Created', 'Last used', 'Device ID', 'Invited by', 'Key hash'];
 const INV_HEADERS = ['Name', 'Role', 'Kind', 'Status', 'Created', 'Expires', 'Used at', 'Device ID', 'Invite ID', 'Created by', 'Code hash'];
 
 // Log column positions (0-based)
-const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17 };
+const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17, PLEFT: 18, PRIGHT: 19, PUNIT: 20, POZ: 21 };
 const PUMP_SIDES = { L: 'Left', R: 'Right', B: 'Both' };
 const MILK = { breast: 'Breast milk', formula: 'Formula' };
 // Devices column positions
@@ -289,6 +289,12 @@ function add_(dev, e) {
     row[L.PSIDE] = PUMP_SIDES[entry.side];
     row[L.PMIN] = entry.minutes;
     row[L.LABEL] = safeCell_(entry.label);
+    if (entry.leftAmt != null || entry.rightAmt != null) {
+      row[L.PLEFT] = entry.leftAmt != null ? entry.leftAmt : '';
+      row[L.PRIGHT] = entry.rightAmt != null ? entry.rightAmt : '';
+      row[L.PUNIT] = entry.pumpUnit === 'ml' ? 'mL' : 'oz';
+      row[L.POZ] = entry.pumpedOz;
+    }
     row[L.END] = new Date(entry.t + entry.minutes * 60000);
   } else {
     row[L.EVENT] = DIAPER_EVENTS[entry.kind];
@@ -329,7 +335,19 @@ function validateEntry_(e) {
     const minutes = Math.round(Number(e.minutes));
     if (!(minutes >= 1 && minutes <= 180)) throw bad('Pump minutes must be between 1 and 180');
     const label = String(e.label || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60);
-    return { id: id, type: 'pump', t: t, side: e.side, minutes: minutes, label: label };
+    const pumpUnit = e.pumpUnit === 'ml' ? 'ml' : 'oz';
+    const amt = (v, used) => {
+      if (!used || v === '' || v == null) return null;
+      const n = Number(v);
+      if (!isFinite(n) || n < 0 || n > (pumpUnit === 'ml' ? 600 : 20)) throw bad('Pumped amount is out of range');
+      return pumpUnit === 'ml' ? Math.round(n * 10) / 10 : Math.round(n * 100) / 100;
+    };
+    const leftAmt = amt(e.leftAmt, e.side !== 'R');
+    const rightAmt = amt(e.rightAmt, e.side !== 'L');
+    const total = (leftAmt || 0) + (rightAmt || 0);
+    const pumpedOz = pumpUnit === 'ml' ? Math.round(total / ML_PER_OZ * 100) / 100 : Math.round(total * 100) / 100;
+    return { id: id, type: 'pump', t: t, side: e.side, minutes: minutes, label: label,
+      leftAmt: leftAmt, rightAmt: rightAmt, pumpUnit: pumpUnit, pumpedOz: pumpedOz };
   }
   if (e.type === 'diaper') {
     if (!DIAPER_EVENTS[e.kind]) throw bad('Unknown diaper type');
@@ -381,7 +399,9 @@ function rowToEntry_(r) {
   if (ev === 'Pump') {
     const sideText = String(r[L.PSIDE] || '');
     const side = /^b/i.test(sideText) ? 'B' : /^r/i.test(sideText) ? 'R' : 'L';
-    return Object.assign(base, { type: 'pump', side: side, minutes: Number(r[L.PMIN]) || 0, label: String(r[L.LABEL] || '') });
+    const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
+    return Object.assign(base, { type: 'pump', side: side, minutes: Number(r[L.PMIN]) || 0, label: String(r[L.LABEL] || ''),
+      leftAmt: num(r[L.PLEFT]), rightAmt: num(r[L.PRIGHT]), pumpUnit: /ml/i.test(String(r[L.PUNIT] || '')) ? 'ml' : 'oz', pumpedOz: num(r[L.POZ]) });
   }
   for (const k in DIAPER_EVENTS) if (DIAPER_EVENTS[k] === ev) return Object.assign(base, { type: 'diaper', kind: k });
   return null;

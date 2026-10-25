@@ -115,6 +115,12 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .kinds.pump-sides .kind { padding: 16px 6px; font-size: 16px; }
 .kinds.pump-sides .kind[aria-pressed="true"] { border-color: var(--pump); background: var(--pump-soft); color: var(--pump); }
 .primary.pump { background: var(--pump); color: var(--on-accent); }
+#sheet-pump .stepper button { color: var(--pump); }
+.amt-wrap { display: inline-flex; align-items: baseline; gap: 4px; }
+.amt-sm { font: inherit; font-size: 22px; font-weight: 800; color: var(--ink); background: transparent; border: 0; border-bottom: 2px dashed var(--line); width: 3.6ch; text-align: center; padding: 0; border-radius: 0; }
+.amt-sm:focus { outline: none; border-bottom-color: var(--pump); }
+.amt-sm::placeholder { color: var(--muted); }
+.stepper .u { font-size: 14px; font-weight: 700; color: var(--muted); }
 
 /* Today */
 .section-title { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 2px -6px; }
@@ -459,6 +465,14 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <button class="chip" type="button" data-pmin="20">20 min</button>
     <button class="chip" type="button" data-pmin="30">30 min</button>
   </div>
+  <div class="field-label" id="pAmtTitle" hidden>Amount pumped (optional)</div>
+  <div class="seg" id="pUnitSeg" role="group" aria-label="Pump unit" hidden>
+    <button type="button" id="pUnitOz" aria-pressed="true">Ounces (oz)</button>
+    <button type="button" id="pUnitMl" aria-pressed="false">Milliliters (mL)</button>
+  </div>
+  <div class="stepper pump-amt" id="pAmtRowL" hidden><span class="lbl">Left</span><div class="ctl"><button type="button" id="pAmtLMinus" aria-label="Less from left">−</button><span class="amt-wrap"><input class="amt-sm num" id="pAmtL" type="text" inputmode="decimal" autocomplete="off" placeholder="–" aria-label="Left amount"><span class="u pu">oz</span></span><button type="button" id="pAmtLPlus" aria-label="More from left">+</button></div></div>
+  <div class="stepper pump-amt" id="pAmtRowR" hidden><span class="lbl">Right</span><div class="ctl"><button type="button" id="pAmtRMinus" aria-label="Less from right">−</button><span class="amt-wrap"><input class="amt-sm num" id="pAmtR" type="text" inputmode="decimal" autocomplete="off" placeholder="–" aria-label="Right amount"><span class="u pu">oz</span></span><button type="button" id="pAmtRPlus" aria-label="More from right">+</button></div></div>
+  <div class="feed-total num" id="pAmtTotal" hidden></div>
   <div class="field-label">Started</div>
   <div class="chips when" data-for="pump"></div>
   <div class="field-label">Storage label (optional)</div>
