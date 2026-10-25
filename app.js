@@ -202,6 +202,7 @@
   const other = s => (s === 'L' ? 'R' : 'L');
   const kindName = { wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' };
   const MILK = { breast: 'Breast milk', formula: 'Formula' };
+  const PUMP_SIDE = { L: 'Left', R: 'Right', B: 'Both sides' };
   const ML_PER_OZ = 29.5735;
   const fmtAmt = (v, unit) => String(unit === 'ml' ? +Number(v).toFixed(1) : +Number(v).toFixed(2));
   function amountText(e) {
@@ -239,6 +240,7 @@
         : sideName(e.left > 0 ? 'L' : e.right > 0 ? 'R' : e.first) + ' only · ' + total + ' min';
       return { icon: 'feed', cls: 'i-feed', t1: 'Breastfeed', t2: t2 + by };
     }
+    if (e.type === 'pump') return { icon: 'pump', cls: 'i-pump', t1: 'Pump', t2: PUMP_SIDE[e.side] + ' · ' + e.minutes + ' min' + (e.label ? ' · ' + e.label : '') + by };
     if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: amountText(e) + (e.source ? ' · ' + MILK[e.source] : '') + by };
     return { icon: e.kind, cls: 'i-diaper', t1: kindName[e.kind] + ' diaper', t2: 'Diaper' + by };
   }
@@ -273,11 +275,19 @@
       $('lastDiaperSub').textContent = kindName[lastDiaper.kind] + ' at ' + fmtTime(lastDiaper.t);
     } else { $('lastDiaperAgo').textContent = 'None yet'; $('lastDiaperSub').textContent = 'Tap Diaper to log one'; }
 
+    const lastEmpty = sorted.find(e => e.type === 'pump' || e.type === 'breast');
+    if (lastEmpty) {
+      $('lastEmptyAgo').textContent = ago(lastEmpty.t);
+      $('lastEmptySub').textContent = lastEmpty.type === 'pump'
+        ? 'Pump, ' + PUMP_SIDE[lastEmpty.side].toLowerCase() + ', ' + lastEmpty.minutes + ' min at ' + fmtTime(lastEmpty.t)
+        : 'Breastfeed: ' + sideParts(lastEmpty).toLowerCase() + ' at ' + fmtTime(lastEmpty.t);
+    } else { $('lastEmptyAgo').textContent = 'None yet'; $('lastEmptySub').textContent = 'Tap Pump or Breastfeed to log one'; }
+
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
     const today = sorted.filter(e => e.t >= midnight.getTime());
     const breastMin = today.filter(e => e.type === 'breast').reduce((s, e) => s + (e.left || 0) + (e.right || 0), 0);
     const bottles = today.filter(e => e.type === 'bottle');
-    $('tFeeds').textContent = today.filter(e => e.type !== 'diaper').length;
+    $('tFeeds').textContent = today.filter(e => e.type === 'breast' || e.type === 'bottle').length;
     $('tFeedMin').textContent = breastMin + ' min';
     const totalOz = bottles.reduce((s, e) => s + (e.oz || 0), 0);
     $('tOz').textContent = prefs.unit === 'ml' ? Math.round(totalOz * ML_PER_OZ) : +totalOz.toFixed(1);
@@ -314,6 +324,7 @@
       if (e.note) { const n = document.createElement('div'); n.className = 't3'; n.textContent = e.note; b.querySelector('.txt').appendChild(n); }
       const whenEl = b.querySelector('.when');
       whenEl.textContent = fmtTime(e.t);
+      if (e.type === 'pump' && e.minutes) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + e.minutes * MIN); whenEl.appendChild(sm); }
       if (e.type === 'breast') {
         const tot = (e.left || 0) + (e.right || 0);
         if (tot) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + tot * MIN); whenEl.appendChild(sm); }
@@ -369,6 +380,7 @@
     openSheet = $('sheet-' + name);
     if (name === 'diaper') { resetDiaper(); resetNote('diaper'); }
     if (name === 'bottle') resetNote('bottle');
+    if (name === 'pump') resetPump();
     if (name === 'feed') { resetNote('manual'); resetNote('timer', active && active.note); }
     if (name === 'bottle') { setWhen('bottle', 0); setUnit(prefs.unit); setSource(prefs.source); }
     if (name === 'feed') { setWhen('manual', 20); renderTimer(); }
@@ -593,27 +605,21 @@
   $('amtInput').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 
   // + and -: tap for one step, hold to repeat (speeds up the longer you hold)
-  function bindStepper(btn, dir) {
+  function holdRepeat(btn, step) {
     let timer = null, delay = 0;
     const stop = () => { clearTimeout(timer); timer = null; };
-    const tick = () => {
-      setAmount(amount + dir * UNITS[unit].step);
-      delay = Math.max(40, delay * 0.85);
-      timer = setTimeout(tick, delay);
-    };
+    const tick = () => { step(); delay = Math.max(40, delay * 0.85); timer = setTimeout(tick, delay); };
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      $('amtInput').blur();
-      setAmount(amount + dir * UNITS[unit].step);
-      delay = 140;
-      timer = setTimeout(tick, 420);
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      step(); delay = 140; timer = setTimeout(tick, 420);
     });
     ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, stop));
     btn.addEventListener('contextmenu', e => e.preventDefault());
-    btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAmount(amount + dir * UNITS[unit].step); } });
+    btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); step(); } });
   }
-  bindStepper($('amtMinus'), -1);
-  bindStepper($('amtPlus'), 1);
+  holdRepeat($('amtMinus'), () => setAmount(amount - UNITS[unit].step));
+  holdRepeat($('amtPlus'), () => setAmount(amount + UNITS[unit].step));
 
   $('bottleSave').addEventListener('click', () => {
     const v = parseFloat($('amtInput').value);
@@ -623,6 +629,37 @@
     prefs.source = source; savePrefs();
     const oz = unit === 'ml' ? Math.round(amount / ML_PER_OZ * 100) / 100 : amount;
     addEntry({ type: 'bottle', t: whenOf('bottle'), amount: amount, unit: unit, oz: oz, source: source, note: noteOf('bottle') });
+    closeSheet();
+  });
+
+  /* Pump: side, minutes, optional storage label */
+  let pumpSide = null, pumpMin = 15;
+  function setPumpMin(v) {
+    pumpMin = Math.max(1, Math.min(180, Math.round(v)));
+    $('pumpVal').textContent = pumpMin;
+    document.querySelectorAll('[data-pmin]').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.pmin) === pumpMin)));
+  }
+  function setPumpSide(sd) {
+    pumpSide = sd === 'L' || sd === 'R' || sd === 'B' ? sd : null;
+    document.querySelectorAll('[data-pside]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pside === pumpSide)));
+    $('pumpSave').disabled = !pumpSide;
+    $('pumpSave').textContent = pumpSide ? 'Save pump' : 'Choose a side';
+  }
+  function resetPump() {
+    setPumpSide(prefs.pumpSide);
+    setPumpMin(prefs.pumpMin || 15);
+    setWhen('pump', 0);
+    $('pumpLabel').value = '';
+    resetNote('pump');
+  }
+  document.querySelectorAll('[data-pside]').forEach(b => b.addEventListener('click', () => setPumpSide(b.dataset.pside)));
+  document.querySelectorAll('[data-pmin]').forEach(c => c.addEventListener('click', () => setPumpMin(Number(c.dataset.pmin))));
+  holdRepeat($('pumpMinus'), () => setPumpMin(pumpMin - 1));
+  holdRepeat($('pumpPlus'), () => setPumpMin(pumpMin + 1));
+  $('pumpSave').addEventListener('click', () => {
+    if (!pumpSide) return;
+    prefs.pumpSide = pumpSide; prefs.pumpMin = pumpMin; savePrefs();
+    addEntry({ type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump') });
     closeSheet();
   });
 

@@ -23,13 +23,14 @@ const DEVICES = 'Devices';
 const INVITES = 'Invites';
 
 const LOG_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
-  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk'];
+  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label'];
 const ML_PER_OZ = 29.5735;
 const DEV_HEADERS = ['Name', 'Role', 'Status', 'Created', 'Last used', 'Device ID', 'Invited by', 'Key hash'];
 const INV_HEADERS = ['Name', 'Role', 'Kind', 'Status', 'Created', 'Expires', 'Used at', 'Device ID', 'Invite ID', 'Created by', 'Code hash'];
 
 // Log column positions (0-based)
-const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14 };
+const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17 };
+const PUMP_SIDES = { L: 'Left', R: 'Right', B: 'Both' };
 const MILK = { breast: 'Breast milk', formula: 'Formula' };
 // Devices column positions
 const D = { NAME: 0, ROLE: 1, STATUS: 2, CREATED: 3, USED: 4, ID: 5, BY: 6, HASH: 7 };
@@ -283,6 +284,12 @@ function add_(dev, e) {
     row[L.AMOUNT] = entry.amount;    // exactly as entered
     row[L.UNIT] = entry.unit === 'ml' ? 'mL' : 'oz';
     row[L.MILK] = MILK[entry.source] || '';
+  } else if (entry.type === 'pump') {
+    row[L.EVENT] = 'Pump';
+    row[L.PSIDE] = PUMP_SIDES[entry.side];
+    row[L.PMIN] = entry.minutes;
+    row[L.LABEL] = safeCell_(entry.label);
+    row[L.END] = new Date(entry.t + entry.minutes * 60000);
   } else {
     row[L.EVENT] = DIAPER_EVENTS[entry.kind];
   }
@@ -316,6 +323,13 @@ function validateEntry_(e) {
     const oz = unit === 'ml' ? Math.round(amount / ML_PER_OZ * 100) / 100 : amount;
     const source = MILK[e.source] ? e.source : '';
     return { id: id, type: 'bottle', t: t, oz: oz, amount: amount, unit: unit, source: source };
+  }
+  if (e.type === 'pump') {
+    if (!PUMP_SIDES[e.side]) throw bad('Choose left, right or both');
+    const minutes = Math.round(Number(e.minutes));
+    if (!(minutes >= 1 && minutes <= 180)) throw bad('Pump minutes must be between 1 and 180');
+    const label = String(e.label || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60);
+    return { id: id, type: 'pump', t: t, side: e.side, minutes: minutes, label: label };
   }
   if (e.type === 'diaper') {
     if (!DIAPER_EVENTS[e.kind]) throw bad('Unknown diaper type');
@@ -363,6 +377,11 @@ function rowToEntry_(r) {
     const milk = String(r[L.MILK] || '');
     const source = /formula/i.test(milk) ? 'formula' : /breast/i.test(milk) ? 'breast' : '';
     return Object.assign(base, { type: 'bottle', oz: oz, amount: amount, unit: unit, source: source });
+  }
+  if (ev === 'Pump') {
+    const sideText = String(r[L.PSIDE] || '');
+    const side = /^b/i.test(sideText) ? 'B' : /^r/i.test(sideText) ? 'R' : 'L';
+    return Object.assign(base, { type: 'pump', side: side, minutes: Number(r[L.PMIN]) || 0, label: String(r[L.LABEL] || '') });
   }
   for (const k in DIAPER_EVENTS) if (DIAPER_EVENTS[k] === ev) return Object.assign(base, { type: 'diaper', kind: k });
   return null;
