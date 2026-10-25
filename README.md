@@ -5,6 +5,7 @@ A phone app for logging a newborn's feeds and diapers, shared by everyone who ca
 - **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact. Records which side you started and ended on.
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
+- **Pumping:** left, right or both, minutes, and an optional storage label (for example, "Bag 12").
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Works offline:** entries wait on the phone and save when it reconnects.
@@ -157,15 +158,16 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
 | Column | Contents |
 |---|---|
 | Time | When it happened. For breastfeeds, when the feed started. |
-| Event | `Breastfeed`, `Bottle`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
+| Event | `Breastfeed`, `Bottle`, `Pump`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
 | Left min, Right min | Breastfeed minutes per side |
 | Bottle oz | Always in ounces, with mL converted at 29.5735 mL per oz, so totals add up |
 | First side, Last side | Where a breastfeed started and ended |
-| Feed end | Breastfeed start plus total minutes |
+| Feed end | Breastfeed or pump start plus its minutes |
 | Logged by, Logged at | Who logged it, and when they pressed Save |
 | Notes | Optional note |
 | ID | Used by the app. Leave it alone. |
 | Amount, Unit, Milk | The bottle amount exactly as entered, `oz` or `mL`, and `Breast milk` or `Formula` |
+| Pump side, Pump min, Label | `Left`, `Right` or `Both`, pumping minutes, and the optional storage label. Pump minutes are kept separate from the breastfeed columns so feeding totals stay accurate. |
 
 You can fix a value by hand in the sheet. The app picks up the change on its next refresh. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
 
