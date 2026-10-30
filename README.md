@@ -135,7 +135,7 @@ Say a phrase like **"Hey Google, log a wet diaper"** to any Google speaker or di
 |---|---|
 | log a wet diaper | Wet diaper |
 | log a dirty diaper | Dirty diaper |
-| log a wet and dirty diaper | Wet + dirty diaper |
+| log a wet and dirty diaper, or log a dirty and wet diaper | Wet + dirty diaper |
 | log a bottle feed of 1 ounce of breast milk | Bottle, 1 oz, breast milk |
 | log a bottle feed of 2 ounces of breast milk | Bottle, 2 oz, breast milk |
 | log a bottle feed of 3 ounces of breast milk | Bottle, 3 oz, breast milk |

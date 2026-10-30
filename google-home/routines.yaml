@@ -28,6 +28,9 @@ automations:
       - type: assistant.event.OkGoogle
         eventData: query
         is: log a wet and dirty diaper
+      - type: assistant.event.OkGoogle
+        eventData: query
+        is: log a dirty and wet diaper
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log dirty and wet diaper
