@@ -136,10 +136,20 @@ Say a phrase like **"Hey Google, Baby Log wet diaper"** to any Google speaker or
 | Baby Log wet diaper | Wet diaper |
 | Baby Log dirty diaper | Dirty diaper |
 | Baby Log dirty and wet diaper, or Baby Log both diaper | Wet + dirty diaper |
-| Baby Log bottle feed **N** ounces of breast milk | Bottle, N oz, breast milk |
-| Baby Log bottle feed **N** ounces of formula | Bottle, N oz, formula |
+| Baby Log bottle feed 1 ounce of breast milk | Bottle, 1 oz, breast milk |
+| Baby Log bottle feed 2 ounces of breast milk | Bottle, 2 oz, breast milk |
+| Baby Log bottle feed 3 ounces of breast milk | Bottle, 3 oz, breast milk |
+| Baby Log bottle feed 4 ounces of breast milk | Bottle, 4 oz, breast milk |
+| Baby Log bottle feed 6 ounces of breast milk | Bottle, 6 oz, breast milk |
+| Baby Log bottle feed 8 ounces of breast milk | Bottle, 8 oz, breast milk |
+| Baby Log bottle feed 1 ounce of formula | Bottle, 1 oz, formula |
+| Baby Log bottle feed 2 ounces of formula | Bottle, 2 oz, formula |
+| Baby Log bottle feed 3 ounces of formula | Bottle, 3 oz, formula |
+| Baby Log bottle feed 4 ounces of formula | Bottle, 4 oz, formula |
+| Baby Log bottle feed 6 ounces of formula | Bottle, 6 oz, formula |
+| Baby Log bottle feed 8 ounces of formula | Bottle, 8 oz, formula |
 
-**N** is 1, 2, 3, 4, 6 or 8 ("1 ounce" for 1). That's 15 commands. Entries are logged at the moment they're said, with no note; fix the time or add a note in the app if needed.
+That's 15 commands. Entries are logged at the moment they're said, with no note; fix the time or add a note in the app if needed.
 
 Google Home only supports fixed phrases for this, so each amount is its own command. Amounts, times and notes can't be spoken freely.
 
