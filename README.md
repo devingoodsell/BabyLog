@@ -2,6 +2,8 @@
 
 A phone app for logging a newborn's feeds and diapers, shared by everyone who cares for the baby. Entries go into a private Google Sheet that you own.
 
+![Baby Log home screen, a breastfeed timer in progress, and the Stats page](docs/screenshots/overview.png)
+
 - **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact. Records which side you started and ended on.
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
@@ -12,7 +14,15 @@ A phone app for logging a newborn's feeds and diapers, shared by everyone who ca
 - **Works offline:** entries wait on the phone and save when it reconnects.
 - Runs on iPhone, Android or any phone browser, and can be added to the Home Screen like an app. Nobody needs a Google account except the person who sets it up.
 
+![Logging a syringe feed in mL, a pump session with amounts per side and a storage label, and the shared timeline with notes](docs/screenshots/logging.png)
+
+![Dark mode for night feeds, and managing who has access](docs/screenshots/night-and-sharing.png)
+
+<sub>Screenshots use made-up sample data.</sub>
+
 It costs nothing to run: the app is hosted free on GitHub Pages and the data lives in your own Google account.
+
+Optionally, log diapers and bottles hands-free by saying "Hey Google, log a wet diaper" to any Google speaker in the house (see [Log by voice with Google Home](#optional-log-by-voice-with-google-home)).
 
 ## How it fits together
 
