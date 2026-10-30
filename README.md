@@ -187,10 +187,11 @@ The script saves these settings in `~/.babylog-home.env` in Cloud Shell, so runn
    - **Account linking:** the OAuth Client ID, Client secret, Authorization URL and Token URL from step B. Leave scopes empty.
    - **Cloud fulfillment URL:** from step B
 4. Click **Save**. You don't need to submit it for certification; it stays private to your project.
+5. Open the **Test** tab of the integration and click **Test**. This is what makes it appear in the Google Home app for your account. Do it with the same Google account your Google Home app uses.
 
 ### D. Link it in the Google Home app
-1. On your phone, open the **Google Home** app → **Devices** → **+ Add** → **Works with Google Home**.
-2. Search for **[test] Baby Log** and tap it. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
+1. On your phone, open the **Google Home** app → **+** → **Link app or service** (called **Works with Google Home** in some versions).
+2. Search for **Baby Log** and tap the entry named **[test] Baby Log**. If it isn't there, recheck step C.5 and that the Google Home app is signed in to the same account, then fully close and reopen the app. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
 3. Fifteen scenes appear, named like the phrases in the table above (for example **Baby Log bottle feed 2 ounces of formula**). Put them all in one room, such as "Nursery", to keep the device list tidy.
 
 Only the person who owns the Google Cloud project does this. Everyone else in the home uses it through the routines below.
