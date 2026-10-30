@@ -129,13 +129,25 @@ The app offers this after someone joins, and it's always available under Setting
 
 ## Optional: log by voice with Google Home
 
-Say **"Hey Google, baby wet diaper"** (or "baby dirty diaper", "baby wet and dirty diaper") to any Google speaker or display in the house, and the entry lands in the sheet and the app within a couple of seconds. Anyone in the home can use it, including a caregiver without a Google account.
+Say a phrase like **"Hey Google, Baby Log wet diaper"** to any Google speaker or display in the house, and the entry lands in the sheet and the app within a couple of seconds. Anyone in the home can use it, including a caregiver without a Google account.
 
-Google Home can't write to a sheet by itself, so this adds a small private service on your own Google Cloud. Google Home sees it as three scenes; a household routine turns a scene on when someone says the phrase.
+| Say "Hey Google, ..." | Logs |
+|---|---|
+| Baby Log wet diaper | Wet diaper |
+| Baby Log dirty diaper | Dirty diaper |
+| Baby Log dirty and wet diaper, or Baby Log both diaper | Wet + dirty diaper |
+| Baby Log bottle feed **N** ounces of breast milk | Bottle, N oz, breast milk |
+| Baby Log bottle feed **N** ounces of formula | Bottle, N oz, formula |
+
+**N** is 1, 2, 3, 4, 6 or 8 ("1 ounce" for 1). That's 15 commands. Entries are logged at the moment they're said, with no note; fix the time or add a note in the app if needed.
+
+Google Home only supports fixed phrases for this, so each amount is its own command. Amounts, times and notes can't be spoken freely.
+
+Google Home can't write to a sheet by itself, so this adds a small private service on your own Google Cloud. Google Home sees it as 15 scenes, one per command; a household routine turns a scene on when someone says its phrase.
 
 ```
-"Hey Google, baby wet diaper"
-  → Google Home household routine → turns on the "Baby wet diaper" scene
+"Hey Google, Baby Log wet diaper"
+  → Google Home household routine → turns on the "Baby Log wet diaper" scene
   → your Cloud Run service (google-home/server.js) → the same Apps Script the app uses
   → new row in the Log, shown in the app as logged by "Google Home"
 ```
@@ -169,15 +181,17 @@ The script saves these settings in `~/.babylog-home.env` in Cloud Shell, so runn
 ### D. Link it in the Google Home app
 1. On your phone, open the **Google Home** app → **Devices** → **+ Add** → **Works with Google Home**.
 2. Search for **[test] Baby Log** and tap it. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
-3. Three scenes appear: **Baby wet diaper**, **Baby dirty diaper** and **Baby wet and dirty diaper**. Assign them to any room.
+3. Fifteen scenes appear, named like the phrases in the table above (for example **Baby Log bottle feed 2 ounces of formula**). Put them all in one room, such as "Nursery", to keep the device list tidy.
 
 Only the person who owns the Google Cloud project does this. Everyone else in the home uses it through the routines below.
 
 ### E. Create the voice routines
-For each scene, in the Google Home app: **Automations** → **+** → **Household**.
-- **Starter:** "When I say to my Assistant" (or "Hey Google" starter) → the phrase, for example **baby wet diaper**. Add a second phrase such as **log a wet diaper** if you like.
-- **Action:** **Adjust home devices** → **Scenes** → the matching Baby Log scene.
-- Save, then try it.
+Create one routine per scene, 15 in all. In the Google Home app: **Automations** → **+** → **Household**.
+- **Starter:** "When I say to my Assistant" (or "Hey Google" starter) → the phrase from the table, for example **Baby Log bottle feed 2 ounces of formula**. For the wet and dirty scene, add both phrases as two starters on the same routine.
+- **Action:** **Adjust home devices** → **Scenes** → the scene with the same name.
+- Save, then try it. If a numbered phrase doesn't trigger, retype the starter with the number as a word ("two ounces").
+
+Saying "Hey Google, activate Baby Log wet diaper" also works without a routine, which is handy for testing.
 
 Household routines can be started by anyone in the home, including guests.
 

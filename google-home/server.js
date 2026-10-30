@@ -2,8 +2,8 @@
  * Baby Log for Google Home.
  *
  * A private Google Home "cloud-to-cloud" integration that shows up in Google Home as
- * a few scenes (Baby wet diaper, ...). Turning a scene on, from a household routine
- * such as "Hey Google, baby wet diaper", adds an entry to the Baby Log sheet through
+ * scenes (Baby Log wet diaper, Baby Log bottle feed 2 ounces of formula, ...). Turning a
+ * scene on, from a household routine such as "Hey Google, Baby Log wet diaper", adds an entry to the Baby Log sheet through
  * the same Apps Script the app uses.
  *
  * Endpoints
@@ -35,12 +35,19 @@ for (const [k, v] of Object.entries({ CLIENT_ID: CONFIG.clientId, CLIENT_SECRET:
   if (!v) { console.error('Missing environment variable ' + k); process.exit(1); }
 }
 
-/* What Google Home sees. Each scene adds one entry. Add more here later. */
+/* What Google Home sees: one scene per voice command. Each scene adds one entry.
+   A household routine maps a spoken phrase ("Hey Google, Baby Log wet diaper") to its scene. */
+const BOTTLE_OZ = [1, 2, 3, 4, 6, 8];
+const MILKS = [{ key: 'breast', words: 'breast milk' }, { key: 'formula', words: 'formula' }];
 const SCENES = [
-  { id: 'diaper-wet', name: 'Baby wet diaper', nicknames: ['wet diaper'], entry: { type: 'diaper', kind: 'wet' } },
-  { id: 'diaper-dirty', name: 'Baby dirty diaper', nicknames: ['dirty diaper', 'poopy diaper'], entry: { type: 'diaper', kind: 'dirty' } },
-  { id: 'diaper-both', name: 'Baby wet and dirty diaper', nicknames: ['wet and dirty diaper', 'soiled diaper'], entry: { type: 'diaper', kind: 'both' } }
-];
+  { id: 'diaper-wet', name: 'Baby Log wet diaper', entry: { type: 'diaper', kind: 'wet' } },
+  { id: 'diaper-dirty', name: 'Baby Log dirty diaper', entry: { type: 'diaper', kind: 'dirty' } },
+  { id: 'diaper-both', name: 'Baby Log dirty and wet diaper', nicknames: ['Baby Log both diaper'], entry: { type: 'diaper', kind: 'both' } }
+].concat(...MILKS.map(m => BOTTLE_OZ.map(oz => ({
+  id: 'bottle-' + m.key + '-' + oz + 'oz',
+  name: 'Baby Log bottle feed ' + oz + (oz === 1 ? ' ounce' : ' ounces') + ' of ' + m.words,
+  entry: { type: 'bottle', oz: oz, amount: oz, unit: 'oz', source: m.key }
+}))));
 
 const CODE_TTL = 10 * 60;          // seconds
 const ACCESS_TTL = 60 * 60;
@@ -204,7 +211,7 @@ function syncDevices() {
     id: s.id,
     type: 'action.devices.types.SCENE',
     traits: ['action.devices.traits.Scene'],
-    name: { name: s.name, defaultNames: [s.name], nicknames: s.nicknames },
+    name: { name: s.name, defaultNames: [s.name], nicknames: s.nicknames || [] },
     willReportState: false,
     attributes: { sceneReversible: false },
     deviceInfo: { manufacturer: 'Baby Log', model: 'voice-log', swVersion: '1' }
