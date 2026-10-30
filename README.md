@@ -221,23 +221,28 @@ Wait a couple of minutes and try again.
 
 Only the person who owns the Google Cloud project does this. Everyone else in the home uses it through the routines below.
 
-### E. Create the voice routines
-Create one routine per scene, 15 in all. In the Google Home app: **Automations** → **+** → **Household**.
-- **Starter:** "When I say to my Assistant" (or "Hey Google" starter) → the phrase from the table, for example **Baby Log bottle feed 2 ounces of formula**. For the wet and dirty scene, add both phrases as two starters on the same routine.
-- **Action:** **Ask Google** → type **activate** followed by the same phrase, for example **activate Baby Log bottle feed 2 ounces of formula**. If it asks which device runs the command, pick the speaker you use most; its confirmation plays there. (Older versions of the app list scenes under **Adjust home devices → Scenes**; either works.)
-- Save, then try it. If a numbered phrase doesn't trigger, retype the starter with the number as a word ("two ounces").
+### E. Add the voice commands
+All 15 commands go in at once as one script, from a computer:
 
-Saying "Hey Google, activate Baby Log wet diaper" also works without a routine, which is handy for testing.
+1. Sign in to [home.google.com](https://home.google.com) with the account your Google Home uses, open **Automations**, and click **Add new**.
+2. Paste the full contents of [`google-home/routines.yaml`](google-home/routines.yaml).
+3. Change every `Office speaker - Office` to one of your own speakers, written exactly as the Google Home app shows it (`Device name - Room name`). The editor suggests valid names as you type, and Find and replace changes all 15 at once.
+4. Click **Validate**, then **Save**.
+5. Try it: say **"Hey Google, log a wet diaper"** to any speaker. It answers "Activating Baby Log wet diaper", and the entry appears in the app within a few seconds. Delete the test entry from the app's timeline afterwards.
 
-**Faster: create all 15 at once with a script.** At [home.google.com](https://home.google.com) → **Automations** → **Add new**, paste the contents of [`google-home/routines.yaml`](google-home/routines.yaml), change `Office speaker - Office` to one of your speakers exactly as the app names it, then **Validate** and **Save**. The phrases in the script are the ones in the table above; the scenes behind them keep their "Baby Log ..." names. The confirmation plays on whichever speaker heard you.
-
-Household routines can be started by anyone in the home, including guests.
+Notes:
+- **Any speaker works.** The phrases are heard by every speaker in the home, and the confirmation plays on the one you spoke to. The speaker named in the script is required by the editor but doesn't limit where the commands work.
+- **Anyone in the home can use them,** including guests, with no setup on their side.
+- **Changing a phrase:** edit the `is:` lines in the script and save. Each `okGoogle:` line must stay exactly `activate` plus the scene name, which is what reaches the service.
+- **If Validate rejects `assistant.event.OkGoogle`,** change those lines to `assistant.command.OkGoogle`; Google's documentation uses both spellings.
+- **If a phrase gets a reply other than "Activating Baby Log ...",** Google matched it to one of its built-in commands. Reword that phrase in the script.
+- Saying "Hey Google, activate Baby Log wet diaper" also works with no script at all, which is handy for checking the service.
 
 ### Changing or removing it
 - **Cut off voice logging:** remove **Google Home** under Settings → People with access in the app.
 - **Unlink:** in the Google Home app, open any Baby Log scene → Settings → Unlink.
 - **Change the passcode or force a re-link:** edit `~/.babylog-home.env` in Cloud Shell and run `./deploy.sh` again.
-- **Add more voice commands:** add an entry to `SCENES` at the top of `google-home/server.js`, run `./deploy.sh`, then say "Hey Google, sync my devices" and create a routine for the new scene.
+- **Add more voice commands:** add an entry to `SCENES` at the top of `google-home/server.js`, run `./deploy.sh`, say "Hey Google, sync my devices", then add a matching automation to the script at home.google.com.
 - **Delete it:** `gcloud run services delete babylog-home --region us-east1`
 
 ## Making changes later
