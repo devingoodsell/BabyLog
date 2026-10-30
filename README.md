@@ -129,25 +129,25 @@ The app offers this after someone joins, and it's always available under Setting
 
 ## Optional: log by voice with Google Home
 
-Say a phrase like **"Hey Google, Baby Log wet diaper"** to any Google speaker or display in the house, and the entry lands in the sheet and the app within a couple of seconds. Anyone in the home can use it, including a caregiver without a Google account.
+Say a phrase like **"Hey Google, log a wet diaper"** to any Google speaker or display in the house, and the entry lands in the sheet and the app within a couple of seconds. Anyone in the home can use it, including a caregiver without a Google account.
 
 | Say "Hey Google, ..." | Logs |
 |---|---|
-| Baby Log wet diaper | Wet diaper |
-| Baby Log dirty diaper | Dirty diaper |
-| Baby Log dirty and wet diaper, or Baby Log both diaper | Wet + dirty diaper |
-| Baby Log bottle feed 1 ounce of breast milk | Bottle, 1 oz, breast milk |
-| Baby Log bottle feed 2 ounces of breast milk | Bottle, 2 oz, breast milk |
-| Baby Log bottle feed 3 ounces of breast milk | Bottle, 3 oz, breast milk |
-| Baby Log bottle feed 4 ounces of breast milk | Bottle, 4 oz, breast milk |
-| Baby Log bottle feed 6 ounces of breast milk | Bottle, 6 oz, breast milk |
-| Baby Log bottle feed 8 ounces of breast milk | Bottle, 8 oz, breast milk |
-| Baby Log bottle feed 1 ounce of formula | Bottle, 1 oz, formula |
-| Baby Log bottle feed 2 ounces of formula | Bottle, 2 oz, formula |
-| Baby Log bottle feed 3 ounces of formula | Bottle, 3 oz, formula |
-| Baby Log bottle feed 4 ounces of formula | Bottle, 4 oz, formula |
-| Baby Log bottle feed 6 ounces of formula | Bottle, 6 oz, formula |
-| Baby Log bottle feed 8 ounces of formula | Bottle, 8 oz, formula |
+| log a wet diaper | Wet diaper |
+| log a dirty diaper | Dirty diaper |
+| log a wet and dirty diaper | Wet + dirty diaper |
+| log a bottle feed of 1 ounce of breast milk | Bottle, 1 oz, breast milk |
+| log a bottle feed of 2 ounces of breast milk | Bottle, 2 oz, breast milk |
+| log a bottle feed of 3 ounces of breast milk | Bottle, 3 oz, breast milk |
+| log a bottle feed of 4 ounces of breast milk | Bottle, 4 oz, breast milk |
+| log a bottle feed of 6 ounces of breast milk | Bottle, 6 oz, breast milk |
+| log a bottle feed of 8 ounces of breast milk | Bottle, 8 oz, breast milk |
+| log a bottle feed of 1 ounce of formula | Bottle, 1 oz, formula |
+| log a bottle feed of 2 ounces of formula | Bottle, 2 oz, formula |
+| log a bottle feed of 3 ounces of formula | Bottle, 3 oz, formula |
+| log a bottle feed of 4 ounces of formula | Bottle, 4 oz, formula |
+| log a bottle feed of 6 ounces of formula | Bottle, 6 oz, formula |
+| log a bottle feed of 8 ounces of formula | Bottle, 8 oz, formula |
 
 That's 15 commands. Entries are logged at the moment they're said, with no note; fix the time or add a note in the app if needed.
 
@@ -229,7 +229,7 @@ Create one routine per scene, 15 in all. In the Google Home app: **Automations**
 
 Saying "Hey Google, activate Baby Log wet diaper" also works without a routine, which is handy for testing.
 
-**Faster: create all 15 at once with a script.** At [home.google.com](https://home.google.com) → **Automations** → **Add new**, paste the contents of [`google-home/routines.yaml`](google-home/routines.yaml), replace `SPEAKER NAME - ROOM NAME` with one of your speakers exactly as the app names it (for example `Nursery speaker - Nursery`), then **Validate** and **Save**. The confirmation plays on whichever speaker heard you.
+**Faster: create all 15 at once with a script.** At [home.google.com](https://home.google.com) → **Automations** → **Add new**, paste the contents of [`google-home/routines.yaml`](google-home/routines.yaml), change `Office speaker - Office` to one of your speakers exactly as the app names it, then **Validate** and **Save**. The phrases in the script are the ones in the table above; the scenes behind them keep their "Baby Log ..." names. The confirmation plays on whichever speaker heard you.
 
 Household routines can be started by anyone in the home, including guests.
 

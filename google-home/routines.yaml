@@ -1,147 +1,142 @@
 # Baby Log voice commands for the Google Home script editor (home.google.com > Automations > Add new).
-# 1. Replace SPEAKER NAME - ROOM NAME (one place per automation; use Find and replace) with one of your
-#    speakers exactly as the Google Home app shows it, e.g. Nursery speaker - Nursery.
-#    The confirmation plays on whichever speaker heard you, so any one speaker works.
-# 2. Validate, then Save. Each automation says the scene name with "activate" in front.
+# Say "Hey Google, <phrase>" to any speaker. Each phrase activates the matching Baby Log scene.
+# The confirmation plays on whichever speaker heard you; the devices line just has to name a real speaker.
 metadata:
   name: Baby Log voice commands
-  description: Say "Hey Google, Baby Log ..." to log diapers and bottles in Baby Log
+  description: Say "Hey Google, log a wet diaper" (and so on) to log diapers and bottles in Baby Log
 automations:
-  # Baby Log wet diaper
+  # log a wet diaper
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log wet diaper
+        is: log a wet diaper
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log wet diaper
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log dirty diaper
+        devices: Office speaker - Office
+  # log a dirty diaper
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log dirty diaper
+        is: log a dirty diaper
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log dirty diaper
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log dirty and wet diaper
+        devices: Office speaker - Office
+  # log a wet and dirty diaper
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log dirty and wet diaper
-      - type: assistant.event.OkGoogle
-        eventData: query
-        is: Baby Log both diaper
+        is: log a wet and dirty diaper
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log dirty and wet diaper
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 1 ounce of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 1 ounce of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 1 ounce of breast milk
+        is: log a bottle feed of 1 ounce of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 1 ounce of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 2 ounces of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 2 ounces of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 2 ounces of breast milk
+        is: log a bottle feed of 2 ounces of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 2 ounces of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 3 ounces of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 3 ounces of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 3 ounces of breast milk
+        is: log a bottle feed of 3 ounces of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 3 ounces of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 4 ounces of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 4 ounces of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 4 ounces of breast milk
+        is: log a bottle feed of 4 ounces of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 4 ounces of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 6 ounces of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 6 ounces of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 6 ounces of breast milk
+        is: log a bottle feed of 6 ounces of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 6 ounces of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 8 ounces of breast milk
+        devices: Office speaker - Office
+  # log a bottle feed of 8 ounces of breast milk
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 8 ounces of breast milk
+        is: log a bottle feed of 8 ounces of breast milk
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 8 ounces of breast milk
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 1 ounce of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 1 ounce of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 1 ounce of formula
+        is: log a bottle feed of 1 ounce of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 1 ounce of formula
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 2 ounces of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 2 ounces of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 2 ounces of formula
+        is: log a bottle feed of 2 ounces of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 2 ounces of formula
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 3 ounces of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 3 ounces of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 3 ounces of formula
+        is: log a bottle feed of 3 ounces of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 3 ounces of formula
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 4 ounces of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 4 ounces of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 4 ounces of formula
+        is: log a bottle feed of 4 ounces of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 4 ounces of formula
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 6 ounces of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 6 ounces of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 6 ounces of formula
+        is: log a bottle feed of 6 ounces of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 6 ounces of formula
-        devices: SPEAKER NAME - ROOM NAME
-  # Baby Log bottle feed 8 ounces of formula
+        devices: Office speaker - Office
+  # log a bottle feed of 8 ounces of formula
   - starters:
       - type: assistant.event.OkGoogle
         eventData: query
-        is: Baby Log bottle feed 8 ounces of formula
+        is: log a bottle feed of 8 ounces of formula
     actions:
       - type: assistant.command.OkGoogle
         okGoogle: activate Baby Log bottle feed 8 ounces of formula
-        devices: SPEAKER NAME - ROOM NAME
+        devices: Office speaker - Office
