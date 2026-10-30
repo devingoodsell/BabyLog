@@ -127,6 +127,67 @@ The app offers this after someone joins, and it's always available under Setting
 
 ---
 
+## Optional: log by voice with Google Home
+
+Say **"Hey Google, baby wet diaper"** (or "baby dirty diaper", "baby wet and dirty diaper") to any Google speaker or display in the house, and the entry lands in the sheet and the app within a couple of seconds. Anyone in the home can use it, including a caregiver without a Google account.
+
+Google Home can't write to a sheet by itself, so this adds a small private service on your own Google Cloud. Google Home sees it as three scenes; a household routine turns a scene on when someone says the phrase.
+
+```
+"Hey Google, baby wet diaper"
+  → Google Home household routine → turns on the "Baby wet diaper" scene
+  → your Cloud Run service (google-home/server.js) → the same Apps Script the app uses
+  → new row in the Log, shown in the app as logged by "Google Home"
+```
+
+It runs within Cloud Run's free tier. You need a Google Cloud project with billing enabled (free-tier use isn't charged), about 45 minutes, and the app already working.
+
+### A. Give the service its own key
+In the Baby Log app, tap your initial → **Invite someone** → name it **Google Home**, leave **Can invite and remove people** off → **Create invite link** → **Copy link**. Keep it for the next step. You can remove "Google Home" from People with access at any time to cut voice logging off.
+
+### B. Deploy the service
+1. Open [Google Cloud Shell](https://shell.cloud.google.com) and select your project: `gcloud config set project YOUR_PROJECT_ID`
+2. Run:
+   ```bash
+   git clone https://github.com/YOUR-GITHUB-NAME/YOUR-REPO-NAME && cd YOUR-REPO-NAME/google-home && ./deploy.sh
+   ```
+3. Paste the invite link when asked. After a few minutes the script prints an **OAuth Client ID**, **Client secret**, **Authorization URL**, **Token URL**, **Cloud fulfillment URL** and a **Link passcode**. Keep that window open.
+
+The script saves these settings in `~/.babylog-home.env` in Cloud Shell, so running it again later redeploys without breaking the link.
+
+### C. Register the integration with Google Home
+1. Go to the [Google Home Developer Console](https://console.home.google.com), click **Create a project**, and pick your Google Cloud project when asked.
+2. Click **Add Cloud-to-cloud integration** and go through to **Setup & configuration**.
+3. Fill in:
+   - **Integration name:** Baby Log
+   - **Device type:** Scene
+   - **App icon:** upload `google-home/icon-144.png` from this repository
+   - **Account linking:** the OAuth Client ID, Client secret, Authorization URL and Token URL from step B. Leave scopes empty.
+   - **Cloud fulfillment URL:** from step B
+4. Click **Save**. You don't need to submit it for certification; it stays private to your project.
+
+### D. Link it in the Google Home app
+1. On your phone, open the **Google Home** app → **Devices** → **+ Add** → **Works with Google Home**.
+2. Search for **[test] Baby Log** and tap it. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
+3. Three scenes appear: **Baby wet diaper**, **Baby dirty diaper** and **Baby wet and dirty diaper**. Assign them to any room.
+
+Only the person who owns the Google Cloud project does this. Everyone else in the home uses it through the routines below.
+
+### E. Create the voice routines
+For each scene, in the Google Home app: **Automations** → **+** → **Household**.
+- **Starter:** "When I say to my Assistant" (or "Hey Google" starter) → the phrase, for example **baby wet diaper**. Add a second phrase such as **log a wet diaper** if you like.
+- **Action:** **Adjust home devices** → **Scenes** → the matching Baby Log scene.
+- Save, then try it.
+
+Household routines can be started by anyone in the home, including guests.
+
+### Changing or removing it
+- **Cut off voice logging:** remove **Google Home** under Settings → People with access in the app.
+- **Unlink:** in the Google Home app, open any Baby Log scene → Settings → Unlink.
+- **Change the passcode or force a re-link:** edit `~/.babylog-home.env` in Cloud Shell and run `./deploy.sh` again.
+- **Add more voice commands:** add an entry to `SCENES` at the top of `google-home/server.js`, run `./deploy.sh`, then say "Hey Google, sync my devices" and create a routine for the new scene.
+- **Delete it:** `gcloud run services delete babylog-home --region us-east1`
+
 ## Making changes later
 
 There are two kinds of change, and they update differently.
@@ -182,6 +243,8 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 | "This invite cannot be used" | The link was already used or has expired. Create a new one. |
 | "This phone no longer has access" | The phone was removed or signed out. Send it a new invite. |
 | "Anyone" isn't offered when deploying | Your Google Workspace blocks sharing outside the organization (see step 6). |
+| Google Home: deploy fails with a permission or organization policy error | Your organization may require sign-in for all Cloud Run services (policy `run.managed.requireInvokerIam`). An organization admin can turn that policy off for this project. |
+| Google Home says "Sorry, it looks like Baby Log is unavailable" | Check the service logs: `gcloud run services logs read babylog-home --region us-east1`. A `log failed` line with `unauthorized` means the Google Home key was removed. Create a new "Google Home" invite in the app and run `./deploy.sh --new-key`. Nothing needs re-linking. |
 | Times in the sheet are off by hours | Set the sheet's time zone under **File → Settings**. |
 | The permission screen asks for your whole Drive | The `@OnlyCurrentDoc` line at the top of `Code.gs` is missing. Paste the file again. |
 
@@ -202,4 +265,5 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 - `config.js`: your Apps Script web app URL (not a secret)
 - `sw.js`, `manifest.webmanifest`, `icons/`: Home Screen install and offline start
 - `apps-script/Code.gs`: the backend, pasted into the sheet's Apps Script
+- `google-home/`: the optional Google Home voice service (`server.js`, `deploy.sh`, `icon-144.png`)
 - `fonts/`: Nunito, under the SIL Open Font License, served locally so the app loads nothing from other sites
