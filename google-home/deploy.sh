@@ -70,6 +70,18 @@ fi
 bold "Turning on the Google Cloud services this needs"
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com --quiet
 
+# New projects don't give the default build account permission to build. Grant it the
+# Cloud Run Builder role once (Google's documented fix), then give IAM a minute to apply.
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format 'value(projectNumber)')"
+BUILD_SA="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+if ! gcloud projects get-iam-policy "$PROJECT" --flatten 'bindings[].members' \
+     --filter "bindings.role=roles/run.builder AND bindings.members=$BUILD_SA" --format 'value(bindings.role)' | grep -q run.builder; then
+  bold "Letting Cloud Build build the service (one time)"
+  gcloud projects add-iam-policy-binding "$PROJECT" --member "$BUILD_SA" --role roles/run.builder --condition None --quiet >/dev/null
+  echo "Waiting 60 seconds for the permission to take effect..."
+  sleep 60
+fi
+
 ENVFILE="$(mktemp)"
 trap 'rm -f "$ENVFILE"' EXIT
 chmod 600 "$ENVFILE"

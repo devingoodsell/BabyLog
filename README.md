@@ -267,6 +267,7 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 | "This invite cannot be used" | The link was already used or has expired. Create a new one. |
 | "This phone no longer has access" | The phone was removed or signed out. Send it a new invite. |
 | "Anyone" isn't offered when deploying | Your Google Workspace blocks sharing outside the organization (see step 6). |
+| Google Home: deploy fails with "the default service account is missing required IAM permissions" | `deploy.sh` grants the build account the Cloud Run Builder role automatically. If you see this on an older copy of the script, run `git pull` and `./deploy.sh` again. |
 | Google Home: deploy fails with a permission or organization policy error | Your organization may require sign-in for all Cloud Run services (policy `run.managed.requireInvokerIam`). An organization admin can turn that policy off for this project. |
 | Google Home says "Sorry, it looks like Baby Log is unavailable" | Check the service logs: `gcloud run services logs read babylog-home --region us-east1`. A `log failed` line with `unauthorized` means the Google Home key was removed. Create a new "Google Home" invite in the app and run `./deploy.sh --new-key`. Nothing needs re-linking. |
 | Times in the sheet are off by hours | Set the sheet's time zone under **File → Settings**. |
