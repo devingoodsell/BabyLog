@@ -189,6 +189,31 @@ The script saves these settings in `~/.babylog-home.env` in Cloud Shell, so runn
 4. Click **Save**. You don't need to submit it for certification; it stays private to your project.
 5. Open the **Test** tab of the integration and click **Test**. This is what makes it appear in the Google Home app for your account. Do it with the same Google account your Google Home app uses.
 
+**If Import or Create project fails with `Permission 'nestconsole.smarthomeProjects.create' denied`,** your account needs Google Home's developer role on the project. In Cloud Shell:
+```bash
+P=YOUR_PROJECT_ID; ME=you@example.com
+ROLE=$(for r in $(gcloud iam roles list --filter="name:nestconsole" --format="value(name)"); do gcloud iam roles describe "$r" --format="value(includedPermissions)" | grep -q "nestconsole.smarthomeProjects.create" && echo "$r" && break; done)
+gcloud projects add-iam-policy-binding "$P" --member="user:$ME" --role="$ROLE" --condition=None
+```
+Wait a couple of minutes and try again.
+
+**If your Google Home app uses a different Google account than your Cloud project** (for example, the project is on a Google Workspace account and your home is on a personal Gmail account), give that account access and run the test as that account:
+1. If the Cloud project belongs to a Workspace organization, allow outside accounts on this project only (outside accounts are blocked by default):
+   ```bash
+   P=YOUR_PROJECT_ID
+   ORG=$(gcloud projects get-ancestors $P --format='value(id,type)' | awk '$2=="organization"{print $1}')
+   gcloud services enable orgpolicy.googleapis.com
+   gcloud organizations add-iam-policy-binding "$ORG" --member="user:YOUR_WORKSPACE_EMAIL" --role="roles/orgpolicy.policyAdmin" --condition=None
+   printf 'name: projects/%s/policies/iam.allowedPolicyMemberDomains\nspec:\n  rules:\n  - allowAll: true\n' "$P" > policy.yaml
+   gcloud org-policies set-policy policy.yaml
+   ```
+2. Grant the Google Home account the developer role found above and Editor on the project:
+   ```bash
+   gcloud projects add-iam-policy-binding "$P" --member="user:YOUR_HOME_EMAIL" --role="$ROLE" --condition=None
+   gcloud projects add-iam-policy-binding "$P" --member="user:YOUR_HOME_EMAIL" --role="roles/editor" --condition=None
+   ```
+3. In a browser signed in only as the Google Home account, open `https://console.home.google.com/projects/YOUR_PROJECT_ID`, accept the terms, open the integration's **Test** tab and click **Test**. Wait 5 to 10 minutes before linking.
+
 ### D. Link it in the Google Home app
 1. On your phone, open the **Google Home** app → **+** → **Link app or service** (called **Works with Google Home** in some versions).
 2. Search for **Baby Log** and tap the entry named **[test] Baby Log**. If it isn't there, recheck step C.5 and that the Google Home app is signed in to the same account, then fully close and reopen the app. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
