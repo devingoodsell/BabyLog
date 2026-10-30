@@ -217,14 +217,14 @@ Wait a couple of minutes and try again.
 ### D. Link it in the Google Home app
 1. On your phone, open the **Google Home** app → **+** → **Link app or service** (called **Works with Google Home** in some versions).
 2. Search for **Baby Log** and tap the entry named **[test] Baby Log**. If it isn't there, recheck step C.5 and that the Google Home app is signed in to the same account, then fully close and reopen the app. A Baby Log page opens; type the **Link passcode** from step B and tap **Link**.
-3. Fifteen scenes appear, named like the phrases in the table above (for example **Baby Log bottle feed 2 ounces of formula**). Put them all in one room, such as "Nursery", to keep the device list tidy.
+3. The 15 scenes are now available, named like the phrases in the table above. They may not appear under All devices; that is normal. Check by saying "Hey Google, activate Baby Log wet diaper" and confirming the entry shows up in the app.
 
 Only the person who owns the Google Cloud project does this. Everyone else in the home uses it through the routines below.
 
 ### E. Create the voice routines
 Create one routine per scene, 15 in all. In the Google Home app: **Automations** → **+** → **Household**.
 - **Starter:** "When I say to my Assistant" (or "Hey Google" starter) → the phrase from the table, for example **Baby Log bottle feed 2 ounces of formula**. For the wet and dirty scene, add both phrases as two starters on the same routine.
-- **Action:** **Adjust home devices** → **Scenes** → the scene with the same name.
+- **Action:** **Ask Google** → type **activate** followed by the same phrase, for example **activate Baby Log bottle feed 2 ounces of formula**. If it asks which device runs the command, pick the speaker you use most; its confirmation plays there. (Older versions of the app list scenes under **Adjust home devices → Scenes**; either works.)
 - Save, then try it. If a numbered phrase doesn't trigger, retype the starter with the number as a word ("two ounces").
 
 Saying "Hey Google, activate Baby Log wet diaper" also works without a routine, which is handy for testing.
