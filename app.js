@@ -1164,9 +1164,10 @@
         }
       }
       if (showX) {
-        const every = days.length > 7 ? 2 : 1;
+        const every = days.length > 14 ? 5 : days.length > 7 ? 2 : 1;
         if ((days.length - 1 - i) % every === 0) {
-          const t = el('text', { x: x + bw / 2, y: height - 6, 'text-anchor': 'middle' }, svg);
+          const last = i === days.length - 1 && days.length > 7;   // keep 'Today' inside the chart
+          const t = el('text', { x: last ? W - padR : x + bw / 2, y: height - 6, 'text-anchor': last ? 'end' : 'middle' }, svg);
           t.textContent = d.isToday ? 'Today' : days.length > 7 ? mdDay(d.start) : shortDay(d.start);
         }
       }
@@ -1182,6 +1183,7 @@
     if (statSel == null || !days.some(d => d.start === statSel)) statSel = days[days.length - 1].start;
     $('rng7').setAttribute('aria-pressed', String(statRange === 7));
     $('rng14').setAttribute('aria-pressed', String(statRange === 14));
+    $('rng30').setAttribute('aria-pressed', String(statRange === 30));
 
     // Averages over complete days that have data (today is still in progress)
     const full = days.filter(d => !d.isToday && !d.before);
@@ -1226,6 +1228,7 @@
   }
   $('rng7').addEventListener('click', () => { statRange = 7; renderStats(); });
   $('rng14').addEventListener('click', () => { statRange = 14; renderStats(); });
+  $('rng30').addEventListener('click', () => { statRange = 30; renderStats(); });
   window.addEventListener('resize', () => { if (openSheet === $('sheet-stats')) renderStats(); });
 
   /* ================================================================ */

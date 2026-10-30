@@ -1,6 +1,6 @@
 // Keeps the app opening when the connection is poor. Always tries the network first,
 // so updates show up right away. Never touches requests to the Google Sheet.
-const CACHE = 'babylog-v5';
+const CACHE = 'babylog-v6';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/apple-touch-icon.png',
   'fonts/nunito-latin-400-normal.woff2', 'fonts/nunito-latin-600-normal.woff2',

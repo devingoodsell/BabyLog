@@ -88,6 +88,7 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .iconbtn svg { width: 20px; height: 20px; }
 /* Stats */
 #sheet-stats { gap: 16px; }
+.seg.seg3 { grid-template-columns: repeat(3, 1fr); }
 .st-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .st-tile { background: var(--bg); border-radius: 14px; padding: 10px 6px; text-align: center; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .st-tile b { font-size: 20px; font-weight: 800; }
@@ -522,9 +523,10 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 <section class="sheet" id="sheet-stats" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
   <div class="grab"></div>
   <div class="sheet-head"><h3 id="statsTitle">Stats</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
-  <div class="seg" role="group" aria-label="Range">
-    <button type="button" id="rng7" aria-pressed="true">Last 7 days</button>
-    <button type="button" id="rng14" aria-pressed="false">Last 14 days</button>
+  <div class="seg seg3" role="group" aria-label="Range">
+    <button type="button" id="rng7" aria-pressed="true">7 days</button>
+    <button type="button" id="rng14" aria-pressed="false">14 days</button>
+    <button type="button" id="rng30" aria-pressed="false">30 days</button>
   </div>
   <div class="st-tiles" id="stTiles"></div>
   <p class="st-note" id="stNote"></p>

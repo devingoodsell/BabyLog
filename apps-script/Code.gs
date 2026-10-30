@@ -15,7 +15,7 @@ const APP_URL = 'https://devingoodsell.github.io/BabyLog/';
 const OWNER_NAME = 'Devin';
 const INVITE_HOURS = 72;     // unused invite links expire after this long
 const PAIR_MINUTES = 15;     // setup codes (moving to the Home Screen app) expire after this long
-const LIST_DAYS = 14;        // how much history the app downloads
+const LIST_DAYS = 30;        // how much history the app downloads (Stats shows up to 30 days)
 const FAIL_LIMIT = 30;       // failed redeem attempts allowed per 10 minutes before redeem pauses
 
 const LOG = 'Log';
