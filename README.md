@@ -229,6 +229,8 @@ Create one routine per scene, 15 in all. In the Google Home app: **Automations**
 
 Saying "Hey Google, activate Baby Log wet diaper" also works without a routine, which is handy for testing.
 
+**Faster: create all 15 at once with a script.** At [home.google.com](https://home.google.com) → **Automations** → **Add new**, paste the contents of [`google-home/routines.yaml`](google-home/routines.yaml), replace `SPEAKER NAME - ROOM NAME` with one of your speakers exactly as the app names it (for example `Nursery speaker - Nursery`), then **Validate** and **Save**. The confirmation plays on whichever speaker heard you.
+
 Household routines can be started by anyone in the home, including guests.
 
 ### Changing or removing it
