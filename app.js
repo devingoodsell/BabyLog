@@ -375,6 +375,7 @@
       tl.appendChild(wrap);
     });
     renderLive();
+    if (openSheet === $('sheet-stats')) renderStats();
   }
 
   /* ================================================================ */
@@ -399,6 +400,7 @@
     if (name === 'diaper') { resetDiaper(); resetNote('diaper'); }
     if (name === 'bottle') resetNote('bottle');
     if (name === 'pump') resetPump();
+    if (name === 'stats') setTimeout(renderStats, 30);
     if (name === 'feed') { resetNote('manual'); resetNote('timer', active && active.note); }
     if (name === 'bottle') { setWhen('bottle', 0); setUnit(prefs.unit); setSource(prefs.source); }
     if (name === 'feed') { setWhen('manual', 20); renderTimer(); }
@@ -414,6 +416,7 @@
   $('scrim').addEventListener('click', closeSheet);
   $('live').addEventListener('click', () => open('feed'));
   $('meBtn').addEventListener('click', () => open('settings'));
+  $('statsBtn').addEventListener('click', () => open('stats'));
   $('sync').addEventListener('click', () => { refresh(); toast(online ? 'Checking for new entries' : 'Trying to reconnect'); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
@@ -1061,6 +1064,169 @@
     render(); setSync();
     refresh();
   }
+
+  /* ================================================================ */
+  /* Stats: per-day totals and charts                                  */
+  /* ================================================================ */
+  let statRange = 7, statSel = null;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const DAY = 86400000;
+  const dayStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const addDays = (t, n) => { const d = new Date(t); d.setDate(d.getDate() + n); return d.getTime(); };
+
+  function dailyStats(range) {
+    const today = dayStart(Date.now());
+    const first = entries.length ? dayStart(Math.min.apply(null, entries.map(e => e.t))) : today;
+    const days = [];
+    for (let i = range - 1; i >= 0; i--) {
+      const start = addDays(today, -i);
+      days.push({ start: start, end: addDays(start, 1), isToday: i === 0, before: start < first,
+        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0 });
+    }
+    entries.forEach(e => {
+      const d = days.find(x => e.t >= x.start && e.t < x.end);
+      if (!d) return;
+      if (e.type === 'diaper') { if (e.kind !== 'dirty') d.wet++; if (e.kind !== 'wet') d.dirty++; }
+      else if (e.type === 'breast') { d.breast++; d.breastMin += (e.left || 0) + (e.right || 0); }
+      else if (e.type === 'bottle') { d.bottles++; d.oz += e.oz || 0; }
+    });
+    return days;
+  }
+
+  const useMl = () => prefs.unit === 'ml';
+  const volOf = oz => (useMl() ? Math.round(oz * ML_PER_OZ) : Math.round(oz * 10) / 10);
+  const volUnit = () => (useMl() ? 'mL' : 'oz');
+  const shortDay = t => new Date(t).toLocaleDateString([], { weekday: 'short' });
+  const mdDay = t => { const d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate(); };
+  const longDay = t => new Date(t).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+  function niceMax(v) {
+    if (v <= 0) return 4;
+    const steps = [1, 2, 2.5, 4, 5, 10];
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const st of steps) { const m = st * mag; if (m >= v) return m; }
+    return 10 * mag;
+  }
+  function el(tag, attrs, parent) {
+    const n = document.createElementNS(SVGNS, tag);
+    Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v));
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  // Bar with a 4px rounded top and a square base
+  function barPath(x, y, w, h, round) {
+    if (h <= 0) return '';
+    const r = round ? Math.min(4, h, w / 2) : 0;
+    return 'M' + x + ',' + (y + h) + 'V' + (y + r) + (r ? 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y : '') +
+      'H' + (x + w - r) + (r ? 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) : '') + 'V' + (y + h) + 'Z';
+  }
+
+  // series: [{ color, get(day) }] stacked bottom to top; label(day) gives the selected bar's tip label
+  function drawBars(svg, days, series, height, label, showX) {
+    const W = Math.max(260, svg.clientWidth || svg.parentNode.clientWidth || 300);
+    const padL = 30, padR = 6, padT = 18, padB = showX ? 22 : 6;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + height);
+    svg.setAttribute('height', height);
+    svg.textContent = '';
+    const plotW = W - padL - padR, plotH = height - padT - padB;
+    const totals = days.map(d => series.reduce((s, se) => s + se.get(d), 0));
+    const max = niceMax(Math.max.apply(null, totals));
+    const y = v => padT + plotH - (v / max) * plotH;
+    const band = plotW / days.length;
+    const bw = Math.min(24, band * 0.62);
+
+    const selIdx = days.findIndex(d => d.start === statSel);
+    if (selIdx >= 0) el('rect', { class: 'sel', x: padL + selIdx * band + 1, y: padT - 14, width: band - 2, height: plotH + 14, rx: 6 }, svg);
+
+    [0, max / 2, max].forEach(v => {
+      el('line', { class: 'grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }, svg);
+      const t = el('text', { x: padL - 6, y: y(v) + 4, 'text-anchor': 'end' }, svg);
+      t.textContent = +v.toFixed(1);
+    });
+
+    days.forEach((d, i) => {
+      const x = padL + i * band + (band - bw) / 2;
+      if (!d.before) {
+        let base = 0;
+        const parts = series.map(se => se.get(d));
+        const topIdx = parts.reduce((k, v, j) => (v > 0 ? j : k), -1);
+        parts.forEach((v, j) => {
+          if (v <= 0) return;
+          const y0 = y(base), y1 = y(base + v);
+          const gap = base > 0 ? 2 : 0;   // 2px surface gap between stacked segments
+          const p = el('path', { d: barPath(x, y1, bw, y0 - y1 - gap, j === topIdx), fill: series[j].color }, svg);
+          if (d.isToday) p.setAttribute('opacity', '0.55');
+          base += v;
+        });
+        if (i === selIdx) {
+          const t = el('text', { class: 'val', x: x + bw / 2, y: y(totals[i]) - 5, 'text-anchor': 'middle' }, svg);
+          t.textContent = label(d);
+        }
+      }
+      if (showX) {
+        const every = days.length > 7 ? 2 : 1;
+        if ((days.length - 1 - i) % every === 0) {
+          const t = el('text', { x: x + bw / 2, y: height - 6, 'text-anchor': 'middle' }, svg);
+          t.textContent = d.isToday ? 'Today' : days.length > 7 ? mdDay(d.start) : shortDay(d.start);
+        }
+      }
+      const hit = el('rect', { class: 'hit', x: padL + i * band, y: 0, width: band, height: height }, svg);
+      hit.addEventListener('click', () => { statSel = d.start; renderStats(); });
+      const tip = el('title', {}, hit);
+      tip.textContent = longDay(d.start);
+    });
+  }
+
+  function renderStats() {
+    const days = dailyStats(statRange);
+    if (statSel == null || !days.some(d => d.start === statSel)) statSel = days[days.length - 1].start;
+    $('rng7').setAttribute('aria-pressed', String(statRange === 7));
+    $('rng14').setAttribute('aria-pressed', String(statRange === 14));
+
+    // Averages over complete days that have data (today is still in progress)
+    const full = days.filter(d => !d.isToday && !d.before);
+    const avg = f => (full.length ? full.reduce((s, d) => s + f(d), 0) / full.length : null);
+    const fmtAvg = v => (v == null ? '–' : String(+v.toFixed(1)));
+    const aFeeds = avg(d => d.breast + d.bottles), aWet = avg(d => d.wet), aDirty = avg(d => d.dirty), aOz = avg(d => d.oz);
+    const tiles = [[fmtAvg(aFeeds), 'Feeds'], [aOz == null ? '–' : String(volOf(aOz)), volUnit() + ' bottle'], [fmtAvg(aWet), 'Wet'], [fmtAvg(aDirty), 'Dirty']];
+    const tbox = $('stTiles'); tbox.textContent = '';
+    tiles.forEach(([v, l]) => tbox.appendChild(h('div', { class: 'st-tile' }, [h('b', { class: 'num', text: v }), h('span', { text: l })])));
+    $('stNote').textContent = full.length
+      ? 'Daily averages over ' + full.length + ' full day' + (full.length === 1 ? '' : 's') + '. Today is shown lighter because it is still going.'
+      : 'Averages appear after the first full day. Today is shown lighter because it is still going.';
+    $('stIntakeAvg').textContent = aFeeds == null ? '' : 'avg ' + fmtAvg(aFeeds) + ' feeds/day';
+    $('stWetAvg').textContent = aWet == null ? '' : 'avg ' + fmtAvg(aWet) + '/day';
+    $('stDirtyAvg').textContent = aDirty == null ? '' : 'avg ' + fmtAvg(aDirty) + '/day';
+    $('stOzTitle').textContent = 'Bottle ' + volUnit() + ' per day';
+
+    const css = getComputedStyle(document.documentElement);
+    const C = k => css.getPropertyValue(k).trim();
+    drawBars($('chFeeds'), days, [{ color: C('--c-breast'), get: d => d.breast }, { color: C('--c-bottle'), get: d => d.bottles }], 140, d => String(d.breast + d.bottles), false);
+    drawBars($('chOz'), days, [{ color: C('--c-bottle'), get: d => volOf(d.oz) }], 110, d => String(volOf(d.oz)), true);
+    drawBars($('chWet'), days, [{ color: C('--c-diaper'), get: d => d.wet }], 120, d => String(d.wet), true);
+    drawBars($('chDirty'), days, [{ color: C('--c-diaper'), get: d => d.dirty }], 120, d => String(d.dirty), true);
+
+    const sel = days.find(d => d.start === statSel);
+    const when = sel.isToday ? 'Today so far' : longDay(sel.start);
+    const setDetail = (id, main, rest) => { const b = $(id); b.textContent = main + ' '; if (rest) b.appendChild(h('span', { text: rest })); };
+    const feeds = sel.breast + sel.bottles;
+    setDetail('stIntakeDetail', when + ': ' + feeds + ' feed' + (feeds === 1 ? '' : 's'),
+      '(' + sel.breast + ' breastfeed' + (sel.breast === 1 ? '' : 's') + ', ' + sel.breastMin + ' min · ' +
+      sel.bottles + ' bottle' + (sel.bottles === 1 ? '' : 's') + ', ' + volOf(sel.oz) + ' ' + volUnit() + ')');
+    setDetail('stWetDetail', when + ': ' + sel.wet + ' wet', '');
+    setDetail('stDirtyDetail', when + ': ' + sel.dirty + ' dirty', '');
+
+    const rows = days.slice().reverse().filter(d => !d.before);
+    const table = h('table', {}, [
+      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Wet', 'Dirty'].map(t => h('th', { text: t })))]),
+      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.wet, d.dirty]
+        .map(v => h('td', { text: String(v) })))))
+    ]);
+    $('stTable').textContent = ''; $('stTable').appendChild(table);
+  }
+  $('rng7').addEventListener('click', () => { statRange = 7; renderStats(); });
+  $('rng14').addEventListener('click', () => { statRange = 14; renderStats(); });
+  window.addEventListener('resize', () => { if (openSheet === $('sheet-stats')) renderStats(); });
 
   /* ================================================================ */
   /* Start                                                             */

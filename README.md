@@ -6,6 +6,7 @@ A phone app for logging a newborn's feeds and diapers, shared by everyone who ca
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
 - **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
+- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, wet and dirty diapers over the last 7 or 14 days, with a table view.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Works offline:** entries wait on the phone and save when it reconnects.

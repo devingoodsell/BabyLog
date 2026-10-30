@@ -35,6 +35,9 @@
   --diaper-soft: #FBEFD9;
   --pump: #8656C2;
   --pump-soft: #F0E8FA;
+  --c-breast: #4F74DB;
+  --c-bottle: #00897A;
+  --c-diaper: #B87A0F;
   --ok: #2E9D5B;
   --warn: #C98A1E;
   --danger: #C2413A;
@@ -51,7 +54,7 @@
   :root {
     --bg: #0D1220; --surface: #161C2B; --ink: #E4E8F1; --muted: #8C95A8; --line: #252D3F;
     --feed: #8DA5F0; --feed-soft: #1E2843; --bottle: #5DBFB2; --bottle-soft: #15302E;
-    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
+    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
     --on-accent: #0D1220; --scrim: rgba(0, 0, 0, .6); --shadow: none; color-scheme: dark;
   }
 }
@@ -81,6 +84,38 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .sync i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .sync[data-state="saving"] i { background: var(--feed); animation: pulse 1s ease-in-out infinite; }
 .sync[data-state="offline"] i { background: var(--warn); }
+.iconbtn { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--surface); box-shadow: var(--shadow); color: var(--ink); display: grid; place-items: center; flex: none; }
+.iconbtn svg { width: 20px; height: 20px; }
+/* Stats */
+#sheet-stats { gap: 16px; }
+.st-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.st-tile { background: var(--bg); border-radius: 14px; padding: 10px 6px; text-align: center; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.st-tile b { font-size: 20px; font-weight: 800; }
+.st-tile span { font-size: 12px; font-weight: 700; color: var(--muted); }
+.st-note { margin: -6px 2px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.st-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 12px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.st-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 0 2px; }
+.st-head h4 { margin: 0; font-size: 16px; font-weight: 800; }
+.st-head span { font-size: 13px; font-weight: 700; color: var(--muted); text-align: right; }
+.st-sub { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 2px; margin-top: 4px; }
+.st-chart { width: 100%; display: block; touch-action: pan-y; }
+.st-chart text { font-family: var(--font); font-size: 11px; font-weight: 700; fill: var(--muted); }
+.st-chart .val { fill: var(--ink); font-size: 12px; font-weight: 800; }
+.st-chart .grid { stroke: var(--line); stroke-width: 1; }
+.st-chart .hit { fill: transparent; cursor: pointer; }
+.st-chart .sel { fill: var(--bg); }
+.st-detail { font-size: 14px; font-weight: 700; padding: 2px 2px 0; min-height: 1.4em; }
+.st-detail span { color: var(--muted); font-weight: 600; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 2px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.st-table { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+.st-table table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+.st-table th, .st-table td { padding: 8px 10px; text-align: right; white-space: nowrap; }
+.st-table th:first-child, .st-table td:first-child { text-align: left; }
+.st-table th { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line); }
+.st-table tr + tr td { border-top: 1px solid var(--line); }
+details.st-more summary { cursor: pointer; font-weight: 800; color: var(--feed); padding: 4px 2px; list-style: none; }
+details.st-more summary::-webkit-details-marker { display: none; }
 .avatar { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--feed-soft); color: var(--feed); font-weight: 800; font-size: 16px; display: grid; place-items: center; }
 
 /* Active feed banner */
@@ -297,6 +332,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <symbol id="i-dirty" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="currentColor"/></symbol>
   <symbol id="i-both" viewBox="0 0 24 24"><path fill="currentColor" d="M8 3s4.5 5 4.5 8.3a4.5 4.5 0 0 1-9 0C3.5 8 8 3 8 3Z"/><circle cx="16.5" cy="15.5" r="4.5" fill="currentColor"/></symbol>
   <symbol id="i-pump" viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h16a1 1 0 0 1 .8 1.6L15 11.5V13h1a1 1 0 0 1 1 1v6a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-6a1 1 0 0 1 1-1h1v-1.5L3.2 4.6A1 1 0 0 1 4 3Zm5 13v1.5h3V16H9Zm0 3v1h3v-1H9Z"/></symbol>
+  <symbol id="i-stats" viewBox="0 0 24 24"><path fill="currentColor" d="M4 13a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7H4v-7Zm6-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12h-4V8Zm6 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v9h-4v-9ZM3 21h18v1.5H3V21Z"/></symbol>
   <symbol id="i-share" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
   <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></symbol>
@@ -316,6 +352,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
       <div class="date" id="today"></div>
     </div>
     <div class="head-right">
+      <button class="iconbtn" id="statsBtn" type="button" aria-label="Stats"><svg><use href="#i-stats"/></svg></button>
       <button class="sync" id="sync" type="button" data-state="ok" aria-label="Sync status"><i></i><span id="syncText">Saved</span></button>
       <button class="avatar" id="meBtn" type="button" aria-label="Settings and people">?</button>
     </div>
@@ -479,6 +516,38 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <input class="text" id="pumpLabel" type="text" maxlength="60" autocomplete="off" placeholder="For example: Bag 12 or Oct 25 AM">
   <div class="note-wrap" data-note="pump"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-pump" rows="2" maxlength="500" placeholder="Optional note" hidden></textarea></div>
   <button class="primary pump" type="button" id="pumpSave" disabled>Choose a side</button>
+</section>
+
+<!-- Stats sheet -->
+<section class="sheet" id="sheet-stats" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+  <div class="grab"></div>
+  <div class="sheet-head"><h3 id="statsTitle">Stats</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="seg" role="group" aria-label="Range">
+    <button type="button" id="rng7" aria-pressed="true">Last 7 days</button>
+    <button type="button" id="rng14" aria-pressed="false">Last 14 days</button>
+  </div>
+  <div class="st-tiles" id="stTiles"></div>
+  <p class="st-note" id="stNote"></p>
+  <div class="st-card">
+    <div class="st-head"><h4>Intake</h4><span id="stIntakeAvg"></span></div>
+    <div class="legend"><span><i style="background:var(--c-breast)"></i>Breastfeeds</span><span><i style="background:var(--c-bottle)"></i>Bottles</span></div>
+    <div class="st-sub">Feeds per day</div>
+    <svg class="st-chart" id="chFeeds" role="img" aria-label="Feeds per day"></svg>
+    <div class="st-sub" id="stOzTitle">Bottle oz per day</div>
+    <svg class="st-chart" id="chOz" role="img" aria-label="Bottle amount per day"></svg>
+    <div class="st-detail" id="stIntakeDetail"></div>
+  </div>
+  <div class="st-card">
+    <div class="st-head"><h4>Wet diapers</h4><span id="stWetAvg"></span></div>
+    <svg class="st-chart" id="chWet" role="img" aria-label="Wet diapers per day"></svg>
+    <div class="st-detail" id="stWetDetail"></div>
+  </div>
+  <div class="st-card">
+    <div class="st-head"><h4>Dirty diapers</h4><span id="stDirtyAvg"></span></div>
+    <svg class="st-chart" id="chDirty" role="img" aria-label="Dirty diapers per day"></svg>
+    <div class="st-detail" id="stDirtyDetail"></div>
+  </div>
+  <details class="st-more"><summary>Show as a table</summary><div class="st-table" id="stTable"></div></details>
 </section>
 
 <!-- Settings and people sheet -->
