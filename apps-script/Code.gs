@@ -23,13 +23,14 @@ const DEVICES = 'Devices';
 const INVITES = 'Invites';
 
 const LOG_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
-  'Feed end', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label', 'Left pumped', 'Right pumped', 'Pump unit', 'Pumped oz'];
+  'End', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label', 'Left pumped', 'Right pumped', 'Pump unit', 'Pumped oz',
+  'Sleep min', 'Weight lb', 'Weight'];
 const ML_PER_OZ = 29.5735;
 const DEV_HEADERS = ['Name', 'Role', 'Status', 'Created', 'Last used', 'Device ID', 'Invited by', 'Key hash'];
 const INV_HEADERS = ['Name', 'Role', 'Kind', 'Status', 'Created', 'Expires', 'Used at', 'Device ID', 'Invite ID', 'Created by', 'Code hash'];
 
 // Log column positions (0-based)
-const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17, PLEFT: 18, PRIGHT: 19, PUNIT: 20, POZ: 21 };
+const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17, PLEFT: 18, PRIGHT: 19, PUNIT: 20, POZ: 21, SLEEPMIN: 22, WLB: 23, WTXT: 24 };
 const PUMP_SIDES = { L: 'Left', R: 'Right', B: 'Both' };
 const MILK = { breast: 'Breast milk', formula: 'Formula' };
 // Devices column positions
@@ -71,6 +72,7 @@ function handle_(req) {
     case 'add': return withLock_(() => add_(dev, req.entry));
     case 'delete': return withLock_(() => remove_(req.id));
     case 'update': return withLock_(() => updateNote_(req.id, req.note));
+    case 'endSleep': return withLock_(() => endSleep_(req.id, req.end));
     case 'pair': return withLock_(() => pair_(dev));
     case 'invite': requireAdmin_(dev); return withLock_(() => invite_(dev, req.name, req.role));
     case 'people': requireAdmin_(dev); return people_(dev);
@@ -296,6 +298,16 @@ function add_(dev, e) {
       row[L.POZ] = entry.pumpedOz;
     }
     row[L.END] = new Date(entry.t + entry.minutes * 60000);
+  } else if (entry.type === 'sleep') {
+    row[L.EVENT] = 'Sleep';
+    if (entry.end) {           // an open sleep (still asleep) has no end yet
+      row[L.END] = new Date(entry.end);
+      row[L.SLEEPMIN] = entry.minutes;
+    }
+  } else if (entry.type === 'weight') {
+    row[L.EVENT] = 'Weight';
+    row[L.WLB] = Math.round(entry.weightOz / 16 * 1000) / 1000;
+    row[L.WTXT] = weightText_(entry.weightOz);
   } else {
     row[L.EVENT] = DIAPER_EVENTS[entry.kind];
   }
@@ -310,7 +322,9 @@ function validateEntry_(e) {
   const id = String(e.id || '');
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw bad('Bad entry id');
   const t = Number(e.t);
-  if (!(t > Date.now() - 7 * 86400000 && t < Date.now() + 10 * 60000)) throw bad('The time must be within the last 7 days');
+  // Weigh-ins can be backdated up to a year (birth weight, past checkups); everything else 7 days
+  const maxDays = e.type === 'weight' ? 366 : 7;
+  if (!(t > Date.now() - maxDays * 86400000 && t < Date.now() + 10 * 60000)) throw bad('The time must be within the last ' + maxDays + ' days');
   const side = s => (s === 'L' || s === 'R' ? s : null);
   const mins = m => { const n = Math.round(Number(m) || 0); return n >= 0 && n <= 180 ? n : NaN; };
 
@@ -349,6 +363,16 @@ function validateEntry_(e) {
     return { id: id, type: 'pump', t: t, side: e.side, minutes: minutes, label: label,
       leftAmt: leftAmt, rightAmt: rightAmt, pumpUnit: pumpUnit, pumpedOz: pumpedOz };
   }
+  if (e.type === 'sleep') {
+    const out = { id: id, type: 'sleep', t: t, end: null, minutes: null };
+    if (e.end != null && e.end !== '') Object.assign(out, sleepEnd_(t, Number(e.end)));
+    return out;
+  }
+  if (e.type === 'weight') {
+    const oz = Math.round(Number(e.weightOz) * 10) / 10;
+    if (!(oz >= 16 && oz <= 640)) throw bad('Weight must be between 1 and 40 lb');
+    return { id: id, type: 'weight', t: t, weightOz: oz };
+  }
   if (e.type === 'diaper') {
     if (!DIAPER_EVENTS[e.kind]) throw bad('Unknown diaper type');
     return { id: id, type: 'diaper', t: t, kind: e.kind };
@@ -365,7 +389,9 @@ function list_() {
   const since = Date.now() - LIST_DAYS * 86400000;
   const out = [];
   rows.forEach((r, i) => {
-    if (!(r[L.TIME] instanceof Date) || r[L.TIME].getTime() < since) return;
+    if (!(r[L.TIME] instanceof Date)) return;
+    // Weigh-ins are few, so all of them are sent for the weight chart; other entries only recent ones
+    if (r[L.TIME].getTime() < since && String(r[L.EVENT]).trim() !== 'Weight') return;
     const entry = rowToEntry_(r);
     if (!entry) return;
     if (!entry.id) { // a row typed in by hand: give it an ID so the app can delete it
@@ -403,6 +429,15 @@ function rowToEntry_(r) {
     return Object.assign(base, { type: 'pump', side: side, minutes: Number(r[L.PMIN]) || 0, label: String(r[L.LABEL] || ''),
       leftAmt: num(r[L.PLEFT]), rightAmt: num(r[L.PRIGHT]), pumpUnit: /ml/i.test(String(r[L.PUNIT] || '')) ? 'ml' : 'oz', pumpedOz: num(r[L.POZ]) });
   }
+  if (ev === 'Sleep') {
+    const end = r[L.END] instanceof Date ? r[L.END].getTime() : null;
+    return Object.assign(base, { type: 'sleep', end: end, minutes: end ? Math.round((end - base.t) / 60000) : null });
+  }
+  if (ev === 'Weight') {
+    const lb = Number(r[L.WLB]);
+    if (!(lb > 0)) return null;
+    return Object.assign(base, { type: 'weight', weightOz: Math.round(lb * 16 * 10) / 10 });
+  }
   for (const k in DIAPER_EVENTS) if (DIAPER_EVENTS[k] === ev) return Object.assign(base, { type: 'diaper', kind: k });
   return null;
 }
@@ -422,6 +457,33 @@ function updateNote_(id, note) {
   const clean = cleanNote_(note);
   sh.getRange(i + 2, L.NOTES + 1).setValue(safeCell_(clean));
   return { id: String(id), note: clean };
+}
+
+function sleepEnd_(start, end) {
+  if (!isFinite(end) || end <= start) throw fail_('bad_request', 'Wake-up time must be after the sleep started.');
+  if (end > Date.now() + 10 * 60000) throw fail_('bad_request', 'Wake-up time is in the future.');
+  if (end - start > 24 * 3600000) throw fail_('bad_request', 'A sleep can be at most 24 hours.');
+  return { end: end, minutes: Math.round((end - start) / 60000) };
+}
+
+// Ends an open sleep (one person can start it and another end it)
+function endSleep_(id, end) {
+  const sh = sheet_(LOG);
+  const i = logIds_(sh).indexOf(String(id));
+  if (i === -1) throw fail_('bad_request', 'That sleep no longer exists.');
+  const row = sh.getRange(i + 2, 1, 1, L.END + 1).getValues()[0];
+  if (String(row[L.EVENT]).trim() !== 'Sleep' || !(row[L.TIME] instanceof Date)) throw fail_('bad_request', 'That entry is not a sleep.');
+  const s = sleepEnd_(row[L.TIME].getTime(), Number(end));
+  sh.getRange(i + 2, L.END + 1).setValue(new Date(s.end));
+  sh.getRange(i + 2, L.SLEEPMIN + 1).setValue(s.minutes);
+  return { id: String(id), end: s.end, minutes: s.minutes };
+}
+
+function weightText_(oz) {
+  let lb = Math.floor(oz / 16);
+  let rest = Math.round((oz - lb * 16) * 10) / 10;
+  if (rest >= 16) { lb += 1; rest = 0; }
+  return lb + ' lb ' + rest + ' oz';
 }
 
 function logIds_(sh) {

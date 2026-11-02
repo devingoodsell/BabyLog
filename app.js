@@ -16,10 +16,10 @@
 
   let auth = load(K.AUTH, null);           // { token, name, role, deviceId }
   let entries = load(K.ENTRIES, []);        // newest data we know about, including unsent entries
-  let outbox = load(K.OUTBOX, []);          // [{op:'add', entry} | {op:'delete', id}]
+  let outbox = load(K.OUTBOX, []);          // [{op:'add', entry} | {op:'delete', id} | {op:'note', id, note} | {op:'endSleep', id, end}]
   let active = load(K.ACTIVE, null);        // breastfeed timer on this phone
   // This phone's bottle settings: last unit, last amount per unit, last milk
-  const prefs = Object.assign({ unit: 'oz', amount: { oz: 2, ml: 5 }, source: null }, load(K.PREFS, {}));
+  const prefs = Object.assign({ unit: 'oz', amount: { oz: 2, ml: 5 }, source: null, weightUnit: 'lb' }, load(K.PREFS, {}));
 
   const saveEntries = () => store(K.ENTRIES, entries);
   const saveOutbox = () => store(K.OUTBOX, outbox);
@@ -90,6 +90,8 @@
             if (e) delete e.pending;
           } else if (op.op === 'note') {
             await api('update', { id: op.id, note: op.note });
+          } else if (op.op === 'endSleep') {
+            await api('endSleep', { id: op.id, end: op.end });
           } else {
             await api('delete', { id: op.id });
           }
@@ -99,7 +101,7 @@
           if (err.code === 'bad_request' || err.code === 'forbidden') {
             outbox.shift(); saveOutbox();
             if (op.op === 'add') { entries = entries.filter(x => x.id !== op.entry.id); saveEntries(); }
-            if (op.op === 'note') { refreshSoon = true; }
+            if (op.op === 'note' || op.op === 'endSleep') { refreshSoon = true; }
             toast("Couldn't save: " + err.message);
             render();
             continue;
@@ -126,6 +128,7 @@
       const pendingDel = new Set(outbox.filter(o => o.op === 'delete').map(o => o.id));
       entries = server.filter(e => !pendingDel.has(e.id)).concat(pendingAdds.filter(p => !server.some(s => s.id === p.id)));
       outbox.filter(o => o.op === 'note').forEach(o => { const e = entries.find(x => x.id === o.id); if (e) e.note = o.note; });
+      outbox.filter(o => o.op === 'endSleep').forEach(o => { const e = entries.find(x => x.id === o.id); if (e) { e.end = o.end; e.minutes = Math.round((o.end - e.t) / MIN); } });
       saveEntries();
       online = true; lastSync = Date.now();
     } catch (err) {
@@ -147,14 +150,14 @@
     entries.push(e);
     outbox.push({ op: 'add', entry: e });
     saveEntries(); saveOutbox(); render(); setSync();
-    if (!(opts && opts.quiet)) toast(describe(e).t1 + ' saved', () => removeEntry(e.id, { quiet: true }));
+    if (!(opts && opts.quiet)) toast((opts && opts.msg) || describe(e).t1 + ' saved', () => removeEntry(e.id, { quiet: true }));
     flush();
   }
 
   function removeEntry(id, opts) {
     const e = entries.find(x => x.id === id);
     entries = entries.filter(x => x.id !== id);
-    outbox = outbox.filter((o, n) => !(o.op === 'note' && o.id === id && !(flushing && n === 0)));
+    outbox = outbox.filter((o, n) => !((o.op === 'note' || o.op === 'endSleep') && o.id === id && !(flushing && n === 0)));
     const i = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
     if (i > 0 || (i === 0 && !flushing)) outbox.splice(i, 1);
     else outbox.push({ op: 'delete', id: id });
@@ -181,6 +184,19 @@
     editingNote = null; openItem = null;
     saveEntries(); saveOutbox(); render(); setSync();
     toast(note ? 'Note saved' : 'Note removed', () => updateNote(id, before));
+    flush();
+  }
+
+  // Ends an open sleep. Whoever started it, any phone can end it.
+  function endSleep(id, end) {
+    const e = entries.find(x => x.id === id);
+    if (!e) return;
+    e.end = end; e.minutes = Math.round((end - e.t) / MIN);
+    const i = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
+    if (i > 0 || (i === 0 && !flushing)) { outbox[i].entry.end = e.end; outbox[i].entry.minutes = e.minutes; }
+    else outbox.push({ op: 'endSleep', id: id, end: end });
+    saveEntries(); saveOutbox(); render(); setSync();
+    toast('Sleep saved · ' + durText(e.minutes));
     flush();
   }
 
@@ -231,6 +247,40 @@
   const sideMin = (e, s) => (s === 'L' ? (e.left || 0) : (e.right || 0));
   const initial = n => (String(n || '?').trim()[0] || '?').toUpperCase();
 
+  // Sleep: "1h 35m", "45m", "3d"
+  function durText(min) {
+    min = Math.max(0, Math.round(min));
+    const hh = Math.floor(min / 60), mm = min % 60;
+    if (hh >= 48) return Math.floor(hh / 24) + 'd';
+    return hh ? hh + 'h' + (mm ? ' ' + mm + 'm' : '') : mm + 'm';
+  }
+  const SLEEP_MAX = 24 * 60 * MIN;
+  // The sleep still going on, if any (one left open for over a day is treated as forgotten)
+  const openSleep = () => entries.filter(e => e.type === 'sleep' && !e.end && e.t > Date.now() - SLEEP_MAX).sort((a, b) => b.t - a.t)[0] || null;
+
+  // Weight is stored in ounces; shown as "7 lb 9.5 oz" or "3.44 kg"
+  const OZ_PER_KG = 35.27396;
+  const wUnit = () => (prefs.weightUnit === 'kg' ? 'kg' : 'lb');
+  function lbOz(oz) {
+    let lb = Math.floor(oz / 16), rest = Math.round((oz - lb * 16) * 10) / 10;
+    if (rest >= 16) { lb += 1; rest = 0; }
+    return [lb, rest];
+  }
+  function weightText(oz, unit) {
+    if ((unit || wUnit()) === 'kg') return (oz / OZ_PER_KG).toFixed(2) + ' kg';
+    const [lb, rest] = lbOz(oz);
+    return lb + ' lb ' + rest + ' oz';
+  }
+  function weightDelta(d) {
+    if (Math.abs(d) < 0.05) return 'no change';
+    const sign = d > 0 ? '+' : '−', a = Math.abs(d);
+    if (wUnit() === 'kg') { const g = Math.round(a / OZ_PER_KG * 1000); return sign + (g >= 1000 ? (g / 1000).toFixed(2) + ' kg' : g + ' g'); }
+    const [lb, rest] = lbOz(a);
+    return sign + (lb ? lb + ' lb ' + rest + ' oz' : rest + ' oz');
+  }
+  const weights = () => entries.filter(e => e.type === 'weight').sort((a, b) => a.t - b.t);
+  const prevWeight = e => weights().filter(w => w.t < e.t).pop() || null;
+
   function sideParts(e) {
     return [e.first, other(e.first)].filter(s => sideMin(e, s) > 0)
       .map((s, i) => (i ? sideName(s).toLowerCase() : sideName(s)) + ' ' + sideMin(e, s) + 'm').join(', ') || '0 min';
@@ -259,6 +309,15 @@
       return { icon: 'feed', cls: 'i-feed', t1: 'Breastfeed', t2: t2 + by };
     }
     if (e.type === 'pump') return { icon: 'pump', cls: 'i-pump', t1: 'Pump', t2: PUMP_SIDE[e.side] + ' · ' + e.minutes + ' min' + (pumpAmtText(e) ? ' · ' + pumpAmtText(e) : '') + (e.label ? ' · ' + e.label : '') + by };
+    if (e.type === 'sleep') {
+      const t2 = e.end ? durText(e.minutes != null ? e.minutes : (e.end - e.t) / MIN)
+        : e.t > Date.now() - SLEEP_MAX ? 'Asleep now · ' + durText((Date.now() - e.t) / MIN) : 'No wake-up time';
+      return { icon: 'sleep', cls: 'i-sleep', t1: 'Sleep', t2: t2 + by };
+    }
+    if (e.type === 'weight') {
+      const p = prevWeight(e);
+      return { icon: 'weight', cls: 'i-weight', t1: 'Weight', t2: weightText(e.weightOz) + (p ? ' · ' + weightDelta(e.weightOz - p.weightOz) : '') + by };
+    }
     if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: amountText(e) + (e.source ? ' · ' + MILK[e.source] : '') + by };
     return { icon: e.kind, cls: 'i-diaper', t1: kindName[e.kind] + ' diaper', t2: 'Diaper' + by };
   }
@@ -301,6 +360,19 @@
         : 'Breastfeed: ' + sideParts(lastEmpty).toLowerCase() + ' at ' + fmtTime(lastEmpty.t);
     } else { $('lastEmptyAgo').textContent = 'None yet'; $('lastEmptySub').textContent = 'Tap Pump or Breastfeed to log one'; }
 
+    const os = openSleep();
+    const lastSlept = sorted.filter(e => e.type === 'sleep' && e.end).sort((a, b) => b.end - a.end)[0];
+    const sleepLabel = $('sleepCard').querySelector('.label');
+    if (os) {
+      sleepLabel.textContent = 'Asleep for';
+      $('sleepAgo').textContent = durText((Date.now() - os.t) / MIN);
+      $('sleepSub').textContent = 'Since ' + fmtTime(os.t);
+    } else if (lastSlept) {
+      sleepLabel.textContent = 'Awake for';
+      $('sleepAgo').textContent = durText((Date.now() - lastSlept.end) / MIN);
+      $('sleepSub').textContent = 'Slept ' + durText(lastSlept.minutes) + ', woke ' + fmtTime(lastSlept.end);
+    } else { sleepLabel.textContent = 'Sleep'; $('sleepAgo').textContent = 'None yet'; $('sleepSub').textContent = 'Tap Sleep to log one'; }
+
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
     const today = sorted.filter(e => e.t >= midnight.getTime());
     const breastMin = today.filter(e => e.type === 'breast').reduce((s, e) => s + (e.left || 0) + (e.right || 0), 0);
@@ -342,6 +414,7 @@
       if (e.note) { const n = document.createElement('div'); n.className = 't3'; n.textContent = e.note; b.querySelector('.txt').appendChild(n); }
       const whenEl = b.querySelector('.when');
       whenEl.textContent = fmtTime(e.t);
+      if (e.type === 'sleep') { const sm = document.createElement('small'); sm.textContent = e.end ? 'to ' + fmtTime(e.end) : 'to now'; whenEl.appendChild(sm); }
       if (e.type === 'pump' && e.minutes) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + e.minutes * MIN); whenEl.appendChild(sm); }
       if (e.type === 'breast') {
         const tot = (e.left || 0) + (e.right || 0);
@@ -400,6 +473,8 @@
     if (name === 'diaper') { resetDiaper(); resetNote('diaper'); }
     if (name === 'bottle') resetNote('bottle');
     if (name === 'pump') resetPump();
+    if (name === 'sleep') resetSleep();
+    if (name === 'weight') resetWeight();
     if (name === 'stats') setTimeout(renderStats, 30);
     if (name === 'feed') { resetNote('manual'); resetNote('timer', active && active.note); }
     if (name === 'bottle') { setWhen('bottle', 0); setUnit(prefs.unit); setSource(prefs.source); }
@@ -415,6 +490,7 @@
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
   $('scrim').addEventListener('click', closeSheet);
   $('live').addEventListener('click', () => open('feed'));
+  $('liveSleep').addEventListener('click', () => open('sleep'));
   $('meBtn').addEventListener('click', () => open('settings'));
   $('statsBtn').addEventListener('click', () => open('stats'));
   $('sync').addEventListener('click', () => { refresh(); toast(online ? 'Checking for new entries' : 'Trying to reconnect'); });
@@ -518,9 +594,20 @@
   function renderLive() {
     const a = active;
     $('live').hidden = !a;
-    if (!a) return;
-    $('liveTitle').textContent = a.running ? 'Feeding · ' + sideName(a.side) + ' side' : 'Feeding paused';
-    $('liveSub').textContent = 'Left ' + clock(sideMs(a, 'L')) + ' · Right ' + clock(sideMs(a, 'R'));
+    if (a) {
+      $('liveTitle').textContent = a.running ? 'Feeding · ' + sideName(a.side) + ' side' : 'Feeding paused';
+      $('liveSub').textContent = 'Left ' + clock(sideMs(a, 'L')) + ' · Right ' + clock(sideMs(a, 'R'));
+    }
+    const os = openSleep();
+    $('liveSleep').hidden = !os;
+    if (os) {
+      $('liveSleepTitle').textContent = 'Asleep · ' + longClock(Date.now() - os.t);
+      $('liveSleepSub').textContent = 'Since ' + fmtTime(os.t) + (os.by ? ' · started by ' + os.by : '');
+    }
+  }
+  function longClock(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000)), hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60);
+    return (hh ? hh + ':' + String(mm).padStart(2, '0') : mm) + ':' + String(s % 60).padStart(2, '0');
   }
   $('feedDone').addEventListener('click', () => {
     const a = active; if (!a) return;
@@ -535,7 +622,11 @@
     closeSheet();
   });
   $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); resetNote('timer'); renderTimer(); renderLive(); toast('Feed discarded'); });
-  setInterval(() => { if (active) { renderLive(); if (openSheet === $('sheet-feed')) renderTimer(); } }, 1000);
+  setInterval(() => {
+    if (active || !$('liveSleep').hidden || openSleep()) renderLive();
+    if (active && openSheet === $('sheet-feed')) renderTimer();
+    if (openSheet === $('sheet-sleep')) renderSleepClock();
+  }, 1000);
 
   /* Manual feed */
   const manual = { first: 'L', L: 10, R: 10 };
@@ -750,6 +841,162 @@
     prefs.pumpUnit = pumpUnit; savePrefs();
     addEntry({ type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump'),
       leftAmt: pumpSide !== 'R' ? pAmt.L : null, rightAmt: pumpSide !== 'L' ? pAmt.R : null, pumpUnit: pumpUnit });
+    closeSheet();
+  });
+
+  /* Sleep: a shared timer (start now, anyone ends it) or start and end entered after */
+  let sleepOpenId = null, slFrom = 0, slTo = 0;
+  const pad2 = n => String(n).padStart(2, '0');
+  const timeVal = t => { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+  const dayLabel = t => {
+    const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    if (t >= d0.getTime()) return 'Today';
+    if (t >= d0.getTime() - 86400000) return 'Yesterday';
+    return fmtDay(t);
+  };
+  // The latest moment with this clock time that is before ref
+  function placeBefore(hm, ref) {
+    const [hh, mi] = hm.split(':').map(Number);
+    const d = new Date(ref); d.setHours(hh, mi, 0, 0);
+    if (d.getTime() >= ref) d.setDate(d.getDate() - 1);
+    return d.getTime();
+  }
+  function setSleepMode(timer) {
+    $('slModeTimer').setAttribute('aria-pressed', String(timer));
+    $('slModeManual').setAttribute('aria-pressed', String(!timer));
+    $('slTimerPane').hidden = !timer;
+    $('slManualPane').hidden = timer;
+  }
+  function resetSleep() {
+    const os = openSleep();
+    sleepOpenId = os ? os.id : null;
+    $('sleepNew').hidden = !!os;
+    $('sleepOpen').hidden = !os;
+    if (os) { setWhen('sleepEnd', 0); renderSleepClock(); return; }
+    setSleepMode(true);
+    setWhen('sleepStart', 0);
+    resetNote('sleep'); resetNote('sleepManual');
+    const now = new Date(); now.setSeconds(0, 0);
+    slTo = now.getTime(); slFrom = slTo - 60 * MIN;
+    showManualSleep();
+  }
+  function renderSleepClock() {
+    if (!sleepOpenId) return;
+    const os = entries.find(e => e.id === sleepOpenId);
+    if (!os || os.end) { resetSleep(); return; }   // someone else ended or removed it
+    $('slClock').textContent = longClock(Date.now() - os.t);
+    $('slSince').textContent = 'Fell asleep at ' + fmtTime(os.t) + (os.by ? ' · started by ' + os.by : '');
+  }
+  function showManualSleep() {
+    $('slFrom').value = timeVal(slFrom); $('slTo').value = timeVal(slTo);
+    $('slFromDay').textContent = dayLabel(slFrom); $('slToDay').textContent = dayLabel(slTo);
+    const m = Math.round((slTo - slFrom) / MIN);
+    $('slTotal').textContent = '';
+    $('slTotal').append('Slept ', h('b', { text: durText(m) }));
+    $('sleepManualSave').disabled = m < 1;
+  }
+  $('slModeTimer').addEventListener('click', () => setSleepMode(true));
+  $('slModeManual').addEventListener('click', () => setSleepMode(false));
+  $('slTo').addEventListener('change', () => {
+    if (!$('slTo').value) return;
+    slTo = placeBefore($('slTo').value, Date.now() + MIN);
+    slFrom = placeBefore(timeVal(slFrom), slTo);
+    showManualSleep();
+  });
+  $('slFrom').addEventListener('change', () => {
+    if (!$('slFrom').value) return;
+    slFrom = placeBefore($('slFrom').value, slTo);
+    showManualSleep();
+  });
+  $('sleepStartBtn').addEventListener('click', () => {
+    addEntry({ type: 'sleep', t: whenOf('sleepStart'), end: null, minutes: null, note: noteOf('sleep') }, { msg: 'Sleep started' });
+    closeSheet();
+  });
+  $('sleepManualSave').addEventListener('click', () => {
+    const m = Math.round((slTo - slFrom) / MIN);
+    if (m < 1) return;
+    addEntry({ type: 'sleep', t: slFrom, end: slTo, minutes: m, note: noteOf('sleepManual') });
+    closeSheet();
+  });
+  $('sleepEndBtn').addEventListener('click', () => {
+    const os = entries.find(e => e.id === sleepOpenId);
+    if (!os || os.end) { closeSheet(); return; }
+    const end = whenOf('sleepEnd');
+    if (end <= os.t) { toast('Wake-up has to be after ' + fmtTime(os.t)); return; }
+    endSleep(os.id, Math.min(end, os.t + SLEEP_MAX));
+    closeSheet();
+  });
+  $('sleepCancel').addEventListener('click', () => { if (sleepOpenId) removeEntry(sleepOpenId); closeSheet(); });
+
+  /* Weight: pounds and ounces, or kilograms. Stored as ounces. */
+  let wOz = 120;
+  const todayVal = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+  function setW(oz) {
+    if (!isFinite(oz)) return;
+    wOz = Math.max(16, Math.min(640, Math.round(oz * 10) / 10));
+    showWeight();
+  }
+  function showWeight() {
+    const [lb, rest] = lbOz(wOz);
+    if (document.activeElement !== $('wLb')) $('wLb').value = lb;
+    if (document.activeElement !== $('wOz')) $('wOz').value = rest;
+    if (document.activeElement !== $('wKg')) $('wKg').value = (wOz / OZ_PER_KG).toFixed(2);
+    $('wSame').textContent = '';
+    $('wSame').append('Same as ', h('b', { text: weightText(wOz, wUnit() === 'kg' ? 'lb' : 'kg') }));
+    const last = weights().pop();
+    $('wPrev').hidden = !last;
+    if (last) $('wPrev').textContent = 'Last weigh-in ' + weightText(last.weightOz) + ' on ' + fmtDay(last.t) + ' · ' + weightDelta(wOz - last.weightOz);
+  }
+  function setWUnit(u) {
+    prefs.weightUnit = u === 'kg' ? 'kg' : 'lb'; savePrefs();
+    $('wUnitLb').setAttribute('aria-pressed', String(wUnit() === 'lb'));
+    $('wUnitKg').setAttribute('aria-pressed', String(wUnit() === 'kg'));
+    $('wLbPane').hidden = wUnit() === 'kg';
+    $('wKgPane').hidden = wUnit() === 'lb';
+    showWeight(); render();
+  }
+  function resetWeight() {
+    const last = weights().pop();
+    wOz = last ? last.weightOz : 120;
+    $('wDate').value = todayVal(); $('wDate').max = todayVal();
+    resetNote('weight');
+    setWUnit(prefs.weightUnit);
+  }
+  $('wUnitLb').addEventListener('click', () => setWUnit('lb'));
+  $('wUnitKg').addEventListener('click', () => setWUnit('kg'));
+  const kgNow = () => Math.round(wOz / OZ_PER_KG * 100) / 100;
+  holdRepeat($('wLbMinus'), () => setW(wOz - 16));
+  holdRepeat($('wLbPlus'), () => setW(wOz + 16));
+  holdRepeat($('wOzMinus'), () => setW(wOz - 0.5));
+  holdRepeat($('wOzPlus'), () => setW(wOz + 0.5));
+  holdRepeat($('wKgMinus'), () => setW((kgNow() - 0.01) * OZ_PER_KG));
+  holdRepeat($('wKgPlus'), () => setW((kgNow() + 0.01) * OZ_PER_KG));
+  function readWeightInputs(which) {
+    const num = id => { const v = parseFloat($(id).value); return isFinite(v) && v >= 0 ? v : null; };
+    if (which === 'kg') { const k = num('wKg'); if (k != null && k > 0) setW(k * OZ_PER_KG); return; }
+    const lb = num('wLb'), oz = num('wOz');
+    const [curLb, curOz] = lbOz(wOz);
+    setW((lb != null ? Math.floor(lb) : curLb) * 16 + (oz != null ? oz : curOz));
+  }
+  [['wLb', 'lb'], ['wOz', 'lb'], ['wKg', 'kg']].forEach(([id, which]) => {
+    const inp = $(id);
+    inp.addEventListener('input', () => { inp.value = inp.value.replace(',', '.').replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'); });
+    inp.addEventListener('focus', () => setTimeout(() => inp.select(), 0));
+    inp.addEventListener('blur', () => { readWeightInputs(which); showWeight(); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+  });
+  $('weightSave').addEventListener('click', () => {
+    const f = document.activeElement;
+    if (f && /^w(Lb|Oz|Kg)$/.test(f.id)) readWeightInputs(f.id === 'wKg' ? 'kg' : 'lb');
+    const day = $('wDate').value || todayVal();
+    let t = Date.now();
+    if (day !== todayVal()) {
+      const [y, mo, d] = day.split('-').map(Number);
+      t = new Date(y, mo - 1, d, 12, 0, 0, 0).getTime();   // a past day without a time: use midday
+      if (t > Date.now()) { toast('That date is in the future'); return; }
+      if (t < Date.now() - 365 * 86400000) { toast('Pick a date within the last year'); return; }
+    }
+    addEntry({ type: 'weight', t: t, weightOz: wOz, note: noteOf('weight') });
     closeSheet();
   });
 
@@ -1076,14 +1323,25 @@
 
   function dailyStats(range) {
     const today = dayStart(Date.now());
-    const first = entries.length ? dayStart(Math.min.apply(null, entries.map(e => e.t))) : today;
+    const logged = entries.filter(e => e.type !== 'weight');   // weigh-ins can be backdated to birth
+    const first = logged.length ? dayStart(Math.min.apply(null, logged.map(e => e.t))) : today;
     const days = [];
     for (let i = range - 1; i >= 0; i--) {
       const start = addDays(today, -i);
       days.push({ start: start, end: addDays(start, 1), isToday: i === 0, before: start < first,
-        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0 });
+        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0, sleepMin: 0, sleeps: 0, longest: 0 });
     }
+    const now = Date.now();
     entries.forEach(e => {
+      if (e.type === 'sleep') {
+        // A sleep that crosses midnight counts toward both days; one still going counts up to now
+        const end = e.end || (e.t > now - SLEEP_MAX ? now : null);
+        if (!end) return;
+        days.forEach(x => { const ov = Math.min(end, x.end) - Math.max(e.t, x.start); if (ov > 0) x.sleepMin += ov / MIN; });
+        const sd = days.find(x => e.t >= x.start && e.t < x.end);
+        if (sd) { sd.sleeps++; sd.longest = Math.max(sd.longest, (end - e.t) / MIN); }
+        return;
+      }
       const d = days.find(x => e.t >= x.start && e.t < x.end);
       if (!d) return;
       if (e.type === 'diaper') { if (e.kind !== 'dirty') d.wet++; if (e.kind !== 'wet') d.dirty++; }
@@ -1178,6 +1436,67 @@
     });
   }
 
+  // Weight: every weigh-in as a line over real time (not tied to the 7/14/30 day range)
+  let weightSel = null;
+  function renderWeightChart(color) {
+    const svg = $('chWeight'), ws = weights();
+    const kg = wUnit() === 'kg';
+    svg.parentNode.querySelector('.st-sub').textContent = 'Every weigh-in, in ' + (kg ? 'kg' : 'lb');
+    if (!ws.length) {
+      svg.hidden = true; $('stWeightHead').textContent = '';
+      $('stWeightDetail').textContent = 'No weigh-ins yet. Tap Weight on the home screen to add one, including the birth weight.';
+      return;
+    }
+    svg.hidden = false;
+    if (!ws.some(w => w.id === weightSel)) weightSel = ws[ws.length - 1].id;
+    const val = oz => (kg ? oz / OZ_PER_KG : oz / 16);
+    const W = Math.max(260, svg.clientWidth || svg.parentNode.clientWidth || 300), H = 150;
+    const padL = 34, padR = 14, padT = 22, padB = 22;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.textContent = '';
+    const vs = ws.map(w => val(w.weightOz));
+    let lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
+    const minSpan = kg ? 0.2 : 0.5;
+    if (hi - lo < minSpan) { const mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
+    const step = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10].find(st => (Math.ceil(hi / st) - Math.floor(lo / st)) <= 4) || 10;
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    const t0 = ws[0].t, t1 = ws[ws.length - 1].t;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const x = t => (t1 === t0 ? padL + plotW / 2 : padL + (t - t0) / (t1 - t0) * plotW);
+    const y = v => padT + plotH - (v - lo) / (hi - lo) * plotH;
+    for (let v = lo; v <= hi + step / 2; v += step) {
+      el('line', { class: 'grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }, svg);
+      const t = el('text', { x: padL - 6, y: y(v) + 4, 'text-anchor': 'end' }, svg);
+      t.textContent = +v.toFixed(2);
+    }
+    if (ws.length > 1) el('path', { d: ws.map((w, i) => (i ? 'L' : 'M') + x(w.t) + ',' + y(val(w.weightOz))).join(''), fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+    const xl = (t, anchor, px) => { const tx = el('text', { x: px, y: H - 6, 'text-anchor': anchor }, svg); tx.textContent = mdDay(t); };
+    if (ws.length > 1) { xl(t0, 'start', padL); xl(t1, 'end', W - padR); } else xl(t0, 'middle', x(t0));
+    ws.forEach((w, i) => {
+      const cx = x(w.t), cy = y(val(w.weightOz)), selected = w.id === weightSel;
+      el('circle', { cx: cx, cy: cy, r: selected ? 5.5 : 3.5, fill: color, stroke: 'var(--surface)', 'stroke-width': selected ? 2 : 1.5 }, svg);
+      if (selected) {
+        const anchor = cx < padL + 40 ? 'start' : cx > W - padR - 40 ? 'end' : 'middle';
+        const t = el('text', { class: 'val halo', x: cx, y: cy - 10, 'text-anchor': anchor }, svg);
+        t.textContent = weightText(w.weightOz);
+      }
+      const hit = el('rect', { class: 'hit', x: cx - 16, y: 0, width: 32, height: H }, svg);
+      hit.addEventListener('click', () => { weightSel = w.id; renderWeightChart(color); });
+      const tip = el('title', {}, hit); tip.textContent = longDay(w.t) + ': ' + weightText(w.weightOz);
+    });
+    const last = ws[ws.length - 1], first = ws[0];
+    $('stWeightHead').textContent = ws.length > 1 ? weightDelta(last.weightOz - first.weightOz) + ' since ' + mdDay(first.t) : '';
+    const i = ws.findIndex(w => w.id === weightSel), w = ws[i], p = ws[i - 1];
+    let rest = '';
+    if (p) {
+      const days = (w.t - p.t) / DAY;
+      const perDay = (w.weightOz - p.weightOz) / Math.max(days, 1);
+      const rate = days >= 1 && Math.abs(perDay) >= 0.05 ? ', about ' + weightDelta(perDay).replace(/^\+/, '') + ' a day' : '';
+      rest = '(' + weightDelta(w.weightOz - p.weightOz) + ' since ' + mdDay(p.t) + rate + ')';
+    }
+    const b = $('stWeightDetail'); b.textContent = longDay(w.t) + ': ' + weightText(w.weightOz) + ' ';
+    if (rest) b.appendChild(h('span', { text: rest }));
+  }
+
   function renderStats() {
     const days = dailyStats(statRange);
     if (statSel == null || !days.some(d => d.start === statSel)) statSel = days[days.length - 1].start;
@@ -1208,6 +1527,11 @@
     drawBars($('chWet'), days, [{ color: C('--c-diaper'), get: d => d.wet }], 120, d => String(d.wet), true);
     drawBars($('chDirty'), days, [{ color: C('--c-diaper'), get: d => d.dirty }], 120, d => String(d.dirty), true);
 
+    drawBars($('chSleep'), days, [{ color: C('--c-sleep'), get: d => d.sleepMin / 60 }], 120, d => (d.sleepMin / 60).toFixed(1) + 'h', true);
+    // Average only over full days with sleep logged, so days before sleep tracking started don't drag it down
+    const sleepDays = full.filter(d => d.sleepMin > 0);
+    $('stSleepAvg').textContent = sleepDays.length ? 'avg ' + durText(sleepDays.reduce((s, d) => s + d.sleepMin, 0) / sleepDays.length) + '/day' : '';
+
     const sel = days.find(d => d.start === statSel);
     const when = sel.isToday ? 'Today so far' : longDay(sel.start);
     const setDetail = (id, main, rest) => { const b = $(id); b.textContent = main + ' '; if (rest) b.appendChild(h('span', { text: rest })); };
@@ -1217,11 +1541,15 @@
       sel.bottles + ' bottle' + (sel.bottles === 1 ? '' : 's') + ', ' + volOf(sel.oz) + ' ' + volUnit() + ')');
     setDetail('stWetDetail', when + ': ' + sel.wet + ' wet', '');
     setDetail('stDirtyDetail', when + ': ' + sel.dirty + ' dirty', '');
+    if (sel.sleepMin > 0) setDetail('stSleepDetail', when + ': ' + durText(sel.sleepMin) + ' asleep',
+      '(' + sel.sleeps + ' sleep' + (sel.sleeps === 1 ? '' : 's') + ' started' + (sel.sleeps ? ', longest ' + durText(sel.longest) : '') + ')');
+    else setDetail('stSleepDetail', when + ': no sleep logged', '');
+    renderWeightChart(C('--c-weight'));
 
     const rows = days.slice().reverse().filter(d => !d.before);
     const table = h('table', {}, [
-      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Wet', 'Dirty'].map(t => h('th', { text: t })))]),
-      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.wet, d.dirty]
+      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Wet', 'Dirty', 'Sleep'].map(t => h('th', { text: t })))]),
+      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.wet, d.dirty, d.sleepMin ? durText(d.sleepMin) : '–']
         .map(v => h('td', { text: String(v) })))))
     ]);
     $('stTable').textContent = ''; $('stTable').appendChild(table);

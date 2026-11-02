@@ -1,6 +1,6 @@
 # Baby Log
 
-A phone app for logging a newborn's feeds and diapers, shared by everyone who cares for the baby. Entries go into a private Google Sheet that you own.
+A phone app for logging a newborn's feeds, diapers, sleep and weight, shared by everyone who cares for the baby. Entries go into a private Google Sheet that you own.
 
 ![Baby Log home screen, a breastfeed timer in progress, and the Stats page](docs/screenshots/overview.png)
 
@@ -8,13 +8,17 @@ A phone app for logging a newborn's feeds and diapers, shared by everyone who ca
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
 - **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
-- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, wet and dirty diapers over the last 7, 14 or 30 days, with a table view.
+- **Sleep:** start a timer when the baby falls asleep and anyone can end it from their own phone at wake-up, or enter the start and end afterwards. Home shows how long the baby has been asleep or awake.
+- **Weight:** pounds and ounces, or kilograms. Weigh-ins can be backdated up to a year, so the birth weight can go in too.
+- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus a weight chart of every weigh-in with the change between them.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Works offline:** entries wait on the phone and save when it reconnects.
 - Runs on iPhone, Android or any phone browser, and can be added to the Home Screen like an app. Nobody needs a Google account except the person who sets it up.
 
 ![Logging a syringe feed in mL, a pump session with amounts per side and a storage label, and the shared timeline with notes](docs/screenshots/logging.png)
+
+![A sleep in progress that anyone can end, logging a weigh-in in pounds and ounces, and the sleep and weight charts](docs/screenshots/sleep-and-weight.png)
 
 ![Dark mode for night feeds, and managing who has access](docs/screenshots/night-and-sharing.png)
 
@@ -33,7 +37,7 @@ Phone (Baby Log app, served from GitHub Pages: screens only, no data, no keys)
 Apps Script attached to your Baby Log sheet (apps-script/Code.gs)
   • @OnlyCurrentDoc: can reach this one spreadsheet and nothing else in your Drive
   • checks the device key on every request
-  • can only add, list, delete and annotate entries, and manage invites
+  • can only add, list, delete and annotate entries, end sleeps, and manage invites
   ▼
 Your Baby Log Google Sheet (never shared or published)
 ```
@@ -286,18 +290,20 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
 
 | Column | Contents |
 |---|---|
-| Time | When it happened. For breastfeeds, when the feed started. |
-| Event | `Breastfeed`, `Bottle`, `Pump`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
+| Time | When it happened. For breastfeeds and pumps, when they started. For sleeps, when the baby fell asleep. A weigh-in backdated to an earlier day is set to midday. |
+| Event | `Breastfeed`, `Bottle`, `Pump`, `Sleep`, `Weight`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
 | Left min, Right min | Breastfeed minutes per side |
 | Bottle oz | Always in ounces, with mL converted at 29.5735 mL per oz, so totals add up |
 | First side, Last side | Where a breastfeed started and ended |
-| Feed end | Breastfeed or pump start plus its minutes |
+| End | When a breastfeed, pump or sleep ended. Empty while a sleep is still going. |
 | Logged by, Logged at | Who logged it, and when they pressed Save |
 | Notes | Optional note |
 | ID | Used by the app. Leave it alone. |
 | Amount, Unit, Milk | The bottle amount exactly as entered, `oz` or `mL`, and `Breast milk` or `Formula` |
 | Pump side, Pump min, Label | `Left`, `Right` or `Both`, pumping minutes, and the optional storage label. Pump minutes are kept separate from the breastfeed columns so feeding totals stay accurate. |
 | Left pumped, Right pumped, Pump unit, Pumped oz | Amount from each breast as entered, `oz` or `mL`, and the total converted to ounces so it can be summed. Empty when no amount was entered. |
+| Sleep min | How long a sleep lasted. Filled in when someone taps Save sleep at wake-up. |
+| Weight lb, Weight | The weight in decimal pounds (for charts and formulas) and as written, for example `7 lb 9.5 oz`. Weights entered in kg are converted. |
 
 You can fix a value by hand in the sheet. The app picks up the change on its next refresh. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
 
@@ -306,7 +312,7 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 | What you see | What to do |
 |---|---|
 | "Baby Log is almost ready" | `config.js` has no `apiUrl` yet (step 7), or GitHub Pages hasn't updated. Wait a minute and reload. |
-| A new script feature doesn't save (for example, notes or mL stay empty in the sheet) | The web app is still running the old copy. Publish a **New version** (see [Making changes later](#making-changes-later)). |
+| A new script feature doesn't save (for example, notes, mL or sleep minutes stay empty in the sheet, or sleeps can't be ended) | The web app is still running the old copy. Publish a **New version** (see [Making changes later](#making-changes-later)). |
 | "This invite cannot be used" | The link was already used or has expired. Create a new one. |
 | "This phone no longer has access" | The phone was removed or signed out. Send it a new invite. |
 | "Anyone" isn't offered when deploying | Your Google Workspace blocks sharing outside the organization (see step 6). |
