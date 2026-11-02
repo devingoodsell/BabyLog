@@ -1,6 +1,6 @@
-// Keeps the app opening when the connection is poor. Always tries the network first,
+// Keeps the app opening when the connection is poor or GitHub has an outage. Always tries the network first,
 // so updates show up right away. Never touches requests to the Google Sheet.
-const CACHE = 'babylog-v7';
+const CACHE = 'babylog-v8';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/apple-touch-icon.png',
   'fonts/nunito-latin-400-normal.woff2', 'fonts/nunito-latin-600-normal.woff2',
@@ -16,11 +16,15 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Only a good answer replaces the saved copy. If GitHub is down or returns an error page
+  // (for example its "unicorn" 5xx page), keep showing the last good copy instead.
+  const saved = () => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./'));
   e.respondWith(
     fetch(e.request).then(res => {
+      if (!res.ok) return saved().then(r => r || res);
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;
-    }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./')))
+    }).catch(saved)
   );
 });
