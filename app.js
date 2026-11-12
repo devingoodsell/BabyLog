@@ -642,12 +642,36 @@
     manual.first = c.dataset.first;
     document.querySelectorAll('[data-first]').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
   }));
-  document.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => {
-    const s = b.dataset.step;
-    manual[s] = Math.max(0, Math.min(90, manual[s] + Number(b.dataset.d)));
-    $('m' + s).textContent = manual[s] + ' min';
-  }));
+  // Minutes per side: tap or hold + and -, or tap the number and type it
+  const FEED_MAX = 180;
+  function showManual(s) {
+    const el = $('m' + s);
+    if (document.activeElement !== el) el.value = manual[s];
+    el.style.width = Math.max(2, el.value.length) + 1 + 'ch';
+  }
+  function setManual(s, v) {
+    if (!isFinite(v)) { showManual(s); return; }
+    manual[s] = Math.max(0, Math.min(FEED_MAX, Math.round(v)));
+    showManual(s);
+  }
+  function readManual(s) {
+    const raw = $('m' + s).value.trim();
+    setManual(s, raw === '' ? 0 : parseInt(raw, 10));
+  }
+  document.querySelectorAll('[data-step]').forEach(b => holdRepeat(b, () => setManual(b.dataset.step, manual[b.dataset.step] + Number(b.dataset.d))));
+  ['L', 'R'].forEach(s => {
+    const el = $('m' + s);
+    el.addEventListener('input', () => {
+      el.value = el.value.replace(/[^0-9]/g, '').slice(0, 3);
+      el.style.width = Math.max(2, el.value.length) + 1 + 'ch';
+    });
+    el.addEventListener('focus', () => setTimeout(() => el.select(), 0));
+    el.addEventListener('blur', () => readManual(s));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') el.blur(); });
+    showManual(s);
+  });
   $('manualSave').addEventListener('click', () => {
+    readManual('L'); readManual('R');   // a number still being typed counts
     if (!manual.L && !manual.R) { toast('Add minutes for at least one side'); return; }
     const both = manual.L > 0 && manual.R > 0;
     const only = manual.L ? 'L' : 'R';
@@ -1329,7 +1353,7 @@
     for (let i = range - 1; i >= 0; i--) {
       const start = addDays(today, -i);
       days.push({ start: start, end: addDays(start, 1), isToday: i === 0, before: start < first,
-        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0, sleepMin: 0, sleeps: 0, longest: 0 });
+        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0, pumps: 0, longestGap: 0, sleepMin: 0, sleeps: 0, longest: 0 });
     }
     const now = Date.now();
     entries.forEach(e => {
@@ -1347,6 +1371,18 @@
       if (e.type === 'diaper') { if (e.kind !== 'dirty') d.wet++; if (e.kind !== 'wet') d.dirty++; }
       else if (e.type === 'breast') { d.breast++; d.breastMin += (e.left || 0) + (e.right || 0); }
       else if (e.type === 'bottle') { d.bottles++; d.oz += e.oz || 0; }
+      else if (e.type === 'pump') d.pumps++;
+    });
+    // Longest stretch without milk removal (breastfeed or pump), from the end of one to the start of the
+    // next, counted on the day the next one starts
+    let lastEnd = null;
+    entries.filter(e => e.type === 'breast' || e.type === 'pump').sort((a, b) => a.t - b.t).forEach(e => {
+      const end = e.t + (e.type === 'pump' ? (e.minutes || 0) : (e.left || 0) + (e.right || 0)) * MIN;
+      if (lastEnd != null && e.t > lastEnd) {
+        const d = days.find(x => e.t >= x.start && e.t < x.end);
+        if (d) d.longestGap = Math.max(d.longestGap, (e.t - lastEnd) / MIN);
+      }
+      lastEnd = lastEnd == null ? end : Math.max(lastEnd, end);
     });
     return days;
   }
@@ -1524,6 +1560,9 @@
     const C = k => css.getPropertyValue(k).trim();
     drawBars($('chFeeds'), days, [{ color: C('--c-breast'), get: d => d.breast }, { color: C('--c-bottle'), get: d => d.bottles }], 140, d => String(d.breast + d.bottles), false);
     drawBars($('chOz'), days, [{ color: C('--c-bottle'), get: d => volOf(d.oz) }], 110, d => String(volOf(d.oz)), true);
+    drawBars($('chRemoval'), days, [{ color: C('--c-breast'), get: d => d.breast }, { color: C('--c-pump'), get: d => d.pumps }], 130, d => String(d.breast + d.pumps), true);
+    const aRem = avg(d => d.breast + d.pumps);
+    $('stRemAvg').textContent = aRem == null ? '' : 'avg ' + fmtAvg(aRem) + '/day';
     drawBars($('chWet'), days, [{ color: C('--c-diaper'), get: d => d.wet }], 120, d => String(d.wet), true);
     drawBars($('chDirty'), days, [{ color: C('--c-diaper'), get: d => d.dirty }], 120, d => String(d.dirty), true);
 
@@ -1539,6 +1578,9 @@
     setDetail('stIntakeDetail', when + ': ' + feeds + ' feed' + (feeds === 1 ? '' : 's'),
       '(' + sel.breast + ' breastfeed' + (sel.breast === 1 ? '' : 's') + ', ' + sel.breastMin + ' min · ' +
       sel.bottles + ' bottle' + (sel.bottles === 1 ? '' : 's') + ', ' + volOf(sel.oz) + ' ' + volUnit() + ')');
+    const rem = sel.breast + sel.pumps, plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    setDetail('stRemDetail', when + ': ' + rem + (rem === 1 ? ' time' : ' times'),
+      '(' + plural(sel.breast, 'breastfeed') + ', ' + plural(sel.pumps, 'pump') + (sel.longestGap ? ' · longest stretch between ' + durText(sel.longestGap) : '') + ')');
     setDetail('stWetDetail', when + ': ' + sel.wet + ' wet', '');
     setDetail('stDirtyDetail', when + ': ' + sel.dirty + ' dirty', '');
     if (sel.sleepMin > 0) setDetail('stSleepDetail', when + ': ' + durText(sel.sleepMin) + ' asleep',
@@ -1548,8 +1590,8 @@
 
     const rows = days.slice().reverse().filter(d => !d.before);
     const table = h('table', {}, [
-      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Wet', 'Dirty', 'Sleep'].map(t => h('th', { text: t })))]),
-      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.wet, d.dirty, d.sleepMin ? durText(d.sleepMin) : '–']
+      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Milk removal', 'Wet', 'Dirty', 'Sleep'].map(t => h('th', { text: t })))]),
+      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.breast + d.pumps, d.wet, d.dirty, d.sleepMin ? durText(d.sleepMin) : '–']
         .map(v => h('td', { text: String(v) })))))
     ]);
     $('stTable').textContent = ''; $('stTable').appendChild(table);

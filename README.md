@@ -4,13 +4,13 @@ A phone app for logging a newborn's feeds, diapers, sleep and weight, shared by 
 
 ![Baby Log home screen, a breastfeed timer in progress, and the Stats page](docs/screenshots/overview.png)
 
-- **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact. Records which side you started and ended on.
+- **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact (type them or use + and -). Records which side you started and ended on.
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
 - **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
 - **Sleep:** start a timer when the baby falls asleep and anyone can end it from their own phone at wake-up, or enter the start and end afterwards. Home shows how long the baby has been asleep or awake.
 - **Weight:** pounds and ounces, or kilograms. Weigh-ins can be backdated up to a year, so the birth weight can go in too.
-- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus a weight chart of every weigh-in with the change between them.
+- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus a weight chart of every weigh-in with the change between them.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Works offline:** entries wait on the phone and save when it reconnects.

@@ -40,6 +40,7 @@
   --weight: #B0456A;
   --weight-soft: #FBE6EE;
   --c-sleep: #6250D6;
+  --c-pump: #B34FA0;
   --c-weight: #C2577A;
   --c-breast: #4F74DB;
   --c-bottle: #00897A;
@@ -60,7 +61,7 @@
   :root {
     --bg: #0D1220; --surface: #161C2B; --ink: #E4E8F1; --muted: #8C95A8; --line: #252D3F;
     --feed: #8DA5F0; --feed-soft: #1E2843; --bottle: #5DBFB2; --bottle-soft: #15302E;
-    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --c-sleep: #9085E9; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
+    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --c-sleep: #9085E9; --c-pump: #D25FC0; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
     --on-accent: #0D1220; --scrim: rgba(0, 0, 0, .6); --shadow: none; color-scheme: dark;
   }
 }
@@ -170,6 +171,9 @@ details.st-more summary::-webkit-details-marker { display: none; }
 .amt-sm:focus { outline: none; border-bottom-color: var(--pump); }
 .amt-sm::placeholder { color: var(--muted); }
 .stepper .u { font-size: 14px; font-weight: 700; color: var(--muted); }
+#manualPane .amt-sm { width: 3ch; }
+#manualPane .amt-sm:focus { border-bottom-color: var(--feed); }
+#manualPane .stepper button { color: var(--feed); touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 
 /* Sleep and weight sheets */
 .primary.sleep { background: var(--sleep); color: var(--on-accent); }
@@ -480,8 +484,8 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
       <button class="chip" type="button" data-first="L" aria-pressed="true">Left</button>
       <button class="chip" type="button" data-first="R" aria-pressed="false">Right</button>
     </div>
-    <div class="stepper"><span class="lbl">Left</span><div class="ctl"><button type="button" data-step="L" data-d="-1" aria-label="Less left">−</button><span class="val num" id="mL">10 min</span><button type="button" data-step="L" data-d="1" aria-label="More left">+</button></div></div>
-    <div class="stepper"><span class="lbl">Right</span><div class="ctl"><button type="button" data-step="R" data-d="-1" aria-label="Less right">−</button><span class="val num" id="mR">10 min</span><button type="button" data-step="R" data-d="1" aria-label="More right">+</button></div></div>
+    <div class="stepper"><span class="lbl">Left</span><div class="ctl"><button type="button" data-step="L" data-d="-1" aria-label="Less left">−</button><span class="amt-wrap"><input class="amt-sm num" id="mL" type="text" inputmode="numeric" autocomplete="off" value="10" aria-label="Left minutes"><span class="u">min</span></span><button type="button" data-step="L" data-d="1" aria-label="More left">+</button></div></div>
+    <div class="stepper"><span class="lbl">Right</span><div class="ctl"><button type="button" data-step="R" data-d="-1" aria-label="Less right">−</button><span class="amt-wrap"><input class="amt-sm num" id="mR" type="text" inputmode="numeric" autocomplete="off" value="10" aria-label="Right minutes"><span class="u">min</span></span><button type="button" data-step="R" data-d="1" aria-label="More right">+</button></div></div>
     <div class="field-label">Started</div>
     <div class="chips when" data-for="manual"></div>
     <div class="note-wrap" data-note="manual"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-manual" rows="2" maxlength="500" placeholder="Optional note, for example: spit up a little" hidden></textarea></div>
@@ -647,6 +651,13 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <div class="st-sub" id="stOzTitle">Bottle oz per day</div>
     <svg class="st-chart" id="chOz" role="img" aria-label="Bottle amount per day"></svg>
     <div class="st-detail" id="stIntakeDetail"></div>
+  </div>
+  <div class="st-card">
+    <div class="st-head"><h4>Milk removal</h4><span id="stRemAvg"></span></div>
+    <div class="legend"><span><i style="background:var(--c-breast)"></i>Breastfeeds</span><span><i style="background:var(--c-pump)"></i>Pumps</span></div>
+    <div class="st-sub">Breastfeeds and pumps per day</div>
+    <svg class="st-chart" id="chRemoval" role="img" aria-label="Breastfeeds and pumps per day"></svg>
+    <div class="st-detail" id="stRemDetail"></div>
   </div>
   <div class="st-card">
     <div class="st-head"><h4>Wet diapers</h4><span id="stWetAvg"></span></div>

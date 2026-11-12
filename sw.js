@@ -1,6 +1,6 @@
 // Keeps the app opening when the connection is poor or GitHub has an outage. Always tries the network first,
 // so updates show up right away. Never touches requests to the Google Sheet.
-const CACHE = 'babylog-v8';
+const CACHE = 'babylog-v9';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/apple-touch-icon.png',
   'fonts/nunito-latin-400-normal.woff2', 'fonts/nunito-latin-600-normal.woff2',
