@@ -4,7 +4,7 @@ A phone app for logging a newborn's feeds, diapers, sleep, growth and health, sh
 
 ![Baby Log home screen, a breastfeed timer in progress, and the Stats page](docs/screenshots/overview.png)
 
-- **Breastfeeds:** a left and right timer (tap to start, switch or pause) that every phone shares, so a feed started on one phone can be switched, paused or saved on another. Or enter minutes per side after the fact (type them or use + and -). Records which side you started and ended on. A side left running over 45 minutes asks "Still feeding?".
+- **Breastfeeds:** a left and right timer (tap to start, switch or pause) that every phone shares, so a feed started on one phone can be switched, paused or saved on another. Or enter minutes per side after the fact (type them or use + and -). Records which side you started and ended on. A pause or side switch of up to 30 minutes stays one feed. A side left running over 45 minutes asks "Still feeding?".
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
 - **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
@@ -99,13 +99,14 @@ The script must be opened from the sheet with **Extensions → Apps Script**. A 
 2. Google asks for permission:
    - It warns that the app isn't verified, because it's your own script. Click **Advanced**, then **Go to (project name)**.
    - The permission list should only ask to view and manage **this spreadsheet**. That's the `@OnlyCurrentDoc` line doing its job. If it asks for your whole Drive, stop and check that you pasted the file exactly.
-3. Your sheet now has five tabs:
+3. Your sheet now has these tabs:
 
 | Tab | What it holds |
 |---|---|
 | **Dashboard** | Last feed, diapers, pump, wake-up, weight, length and medicine, and 24-hour and since-midnight totals including pumps, milk removal and hours asleep |
-| **Log** | One row per entry. This is where the app writes. |
 | **Daily** | Per-day totals, including pumps, milk removal and hours asleep |
+| **Timeline** | Every entry, newest first, one line each (read-only: it is a formula over the tabs below) |
+| **Feeds, Pumps, Diapers, Sleep, Growth, Health, Activities** | One row per entry, a tab for each kind. This is where the app writes. See [The entry tabs](#the-entry-tabs). |
 | **Devices** | Each phone with access: who, when it was last used, and whether it's active |
 | **Invites** | Invite links and setup codes. Codes are stored only as hashes. |
 
@@ -184,7 +185,7 @@ Google Home can't write to a sheet by itself, so this adds a small private servi
 "Hey Google, Baby Log wet diaper"
   → Google Home household routine → turns on the "Baby Log wet diaper" scene
   → your Cloud Run service (google-home/server.js) → the same Apps Script the app uses
-  → new row in the Log, shown in the app as logged by "Google Home"
+  → new row in the Diapers tab, shown in the app as logged by "Google Home"
 ```
 
 It runs within Cloud Run's free tier. You need a Google Cloud project with billing enabled (free-tier use isn't charged), about 45 minutes, and the app already working.
@@ -315,7 +316,22 @@ There are two kinds of change, and they update differently.
 
 The web address stays the same. Don't use **New deployment** for updates: it creates a second address that the app doesn't know about.
 
-**The sheet's summary tabs.** The Dashboard and Daily tabs hold only formulas, made when you first ran setup. To get the newest version (with pumps, milk removal, sleep, growth and medicine), use the **Baby Log** menu in the sheet → **Rebuild Dashboard and Daily tabs**. It replaces those two tabs; the Log is not touched.
+**The sheet's summary tabs.** The Dashboard, Daily and Timeline tabs hold only formulas, made when you first ran setup. To get the newest version, use the **Baby Log** menu in the sheet → **Rebuild Dashboard, Daily and Timeline tabs**. It replaces those three tabs; your entries are not touched.
+
+**Updating a sheet from before November 2026 (one Log tab) to a tab per kind of entry.** Older sheets kept every entry in one Log tab, with some amounts in two columns and breastfeeds often split into several rows (one per side or pause), which inflated the feed counts. To update:
+
+1. Paste the latest `apps-script/Code.gs` into Apps Script and click **Save**.
+2. In the function menu choose **migrateToTabs** and click **Run**. It takes a few seconds and ends with a report in the execution log.
+3. Right away, publish a new version (above). Until you do, phones keep using the old script; anything logged in between waits on the phone and saves once the new version is live.
+
+What it does:
+
+- Moves every entry into its own tab, each value once (see [The entry tabs](#the-entry-tabs)).
+- Joins breastfeed rows into one feed when each piece started within 30 minutes of the previous piece ending.
+- Keeps a voice command once when two speakers both logged it (identical, within a minute).
+- Takes bottle ounces from the "Bottle oz" column, so a fix made there by hand stands.
+- Lists anything it did not change on its own: a breastfeed that overlaps another by more than 10 minutes (most likely the same feed logged by two people) stays as two feeds for you to decide.
+- Keeps the old tab, renamed **Log (archive)**, unchanged. Running it again does nothing.
 
 **Tests.** `npm test` runs the browser tests in `tests/` against the real `Code.gs` on an in-memory sheet (`tests/mock-server.js`). They also run on GitHub on every push (`.github/workflows/test.yml`). To run them on your computer: `npm install`, `npm ci --prefix google-home`, `npx playwright install chromium`, then `npm test`.
 
@@ -329,32 +345,27 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
   - `PAIR_MINUTES` (default 15): how long a setup code lasts
   - `LIST_DAYS` (default 30): how much history the app downloads; Stats shows up to 30 days
 
-## The Log tab
+## The entry tabs
 
-| Column | Contents |
+Each kind of entry has its own tab, and each value is stored once. Amounts are kept in ounces, inches and °F so totals and charts add up; **As entered** shows the mL, kg, cm or °C someone typed, and is empty when that was ounces, pounds, inches or °F.
+
+| Tab | Columns |
 |---|---|
-| Time | When it happened. For breastfeeds, pumps and activities, when they started. For sleeps, when the baby fell asleep. A weight or length backdated to an earlier day is set to midday, and the app shows it by date only. |
-| Event | `Breastfeed`, `Bottle`, `Pump`, `Sleep`, `Weight`, `Length`, `Medicine`, `Temperature`, `Vaccine`, `Symptom`, `Doctor visit`, `Activity`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
-| Left min, Right min | Breastfeed minutes per side |
-| Bottle oz | Always in ounces, with mL converted at 29.5735 mL per oz, so totals add up |
-| First side, Last side | Where a breastfeed started and ended |
-| End | When a breastfeed, pump, sleep or timed activity ended. Empty while a sleep is still going. |
-| Logged by, Logged at | Who logged it, and when they pressed Save |
-| Notes | Optional note |
-| ID | Used by the app. Leave it alone. |
-| Amount, Unit, Milk | The bottle amount exactly as entered, `oz` or `mL`, and `Breast milk` or `Formula` |
-| Pump side, Pump min, Label | `Left`, `Right` or `Both`, pumping minutes, and the optional storage label. Pump minutes are kept separate from the breastfeed columns so feeding totals stay accurate. |
-| Left pumped, Right pumped, Pump unit, Pumped oz | Amount from each breast as entered, `oz` or `mL`, and the total converted to ounces so it can be summed. Empty when no amount was entered. |
-| Sleep min | How long a sleep lasted. Filled in when someone taps Save sleep at wake-up. |
-| Weight lb, Weight | The weight in decimal pounds (for charts and formulas) and as written, for example `7 lb 9.5 oz`. Weights entered in kg are converted. |
-| Detail | The medicine, vaccine, symptom, visit reason, how a temperature was taken, or the activity |
-| Dose, Remind h | A medicine's dose as typed, and how many hours until the next dose is due (empty for no reminder) |
-| Temp F, Temp | A temperature in °F (for charts and formulas) and as entered, for example `38.2 °C` |
-| Length in, Length | Length in inches and as entered, for example `52 cm` |
-| Activity min | How long an activity lasted, when entered |
-| Updated at | When the row was last added or changed from the app. Phones use it to download only what changed. |
+| **Feeds** | Time, Type (`Breastfeed` or `Bottle`), Left min, Right min, First side, Last side, End (when a breastfeed ended, pauses included), Ounces, Milk (`Breast milk` or `Formula`), As entered |
+| **Pumps** | Time, Side (`Left`, `Right` or `Both`), Minutes, Left oz, Right oz, As entered, Label |
+| **Diapers** | Time, Kind (`Wet`, `Dirty` or `Wet + dirty`) |
+| **Sleep** | Time (fell asleep), Woke up (empty while still asleep) |
+| **Growth** | Time, Measure (`Weight` or `Length`), Pounds, Ounces, Inches, As entered |
+| **Health** | Time, Type (`Medicine`, `Temperature`, `Vaccine`, `Symptom` or `Doctor visit`), Detail, Dose, Remind h (hours until the next dose is due), Temp °F, As entered |
+| **Activities** | Time, Activity, Minutes |
 
-You can fix a value by hand in the sheet. The app picks up hand edits within 10 minutes (each phone downloads everything again at least that often), or right away when you tap the sync pill. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
+Every tab ends with the same five columns: **Notes**, **Logged by**, **Logged at** (when they pressed Save), **Updated at** (phones use it to download only what changed) and **ID** (used by the app; leave it alone).
+
+Time is when it happened: for breastfeeds, pumps and activities, when they started. A weight or length backdated to an earlier day is set to midday, and the app shows it by date only. Rows stay in time order; one logged late is moved into place.
+
+**A breastfeed is one row,** even with a pause or a side switch in the middle. Starting the timer, or entering a feed after the fact, within 30 minutes of the last breastfeed ending adds to that feed. The timer says so and offers **Start a new feed instead**, and the saved message offers **Keep separate**.
+
+You can fix a value by hand. The app picks up hand edits within 10 minutes (each phone downloads everything again at least that often), or right away when you tap the sync pill. If you change an amount by hand, **As entered** no longer matches it and the app shows your amount. Rows you add by hand appear in the app too, as long as Time is a date and the kind column (Type, Kind, Measure) is filled in. The script finds columns by their header, so you can add your own columns at the end of a tab.
 
 ## Troubleshooting
 
@@ -370,6 +381,7 @@ You can fix a value by hand in the sheet. The app picks up hand edits within 10 
 | Google Home says "Sorry, it looks like Baby Log is unavailable" | Check the service logs: `gcloud run services logs read babylog-home --region us-east1`. A `log failed` line with `unauthorized` means the Google Home key was removed. Create a new "Google Home" invite in the app and run `./deploy.sh --new-key`. Nothing needs re-linking. |
 | Reminders: no "Notifications on this phone" switch | On iPhone, open Baby Log from the Home Screen icon (iOS 16.4 or later). If it says reminders are not set up, follow [reminder notifications](#optional-reminder-notifications). |
 | Reminders: the test works but no reminders arrive | Check that the `checkAlerts` trigger exists in Apps Script under **Triggers**; run **setupReminders** again if not. The trigger's run history there shows any errors. |
+| Something stays "waiting" and the sync pill's details say "The sheet needs its one-time update" | A new script was published before **migrateToTabs** ran. Run it now (see [Making changes later](#making-changes-later)); the waiting entries then save on their own. |
 | Something stays "waiting" | Tap the sync pill. It lists each waiting change and the last error, with **Try now** and **Discard**. |
 | Times in the sheet are off by hours | Set the sheet's time zone under **File → Settings**. |
 | The permission screen asks for your whole Drive | The `@OnlyCurrentDoc` line at the top of `Code.gs` is missing. Paste the file again. |

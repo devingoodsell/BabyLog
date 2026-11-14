@@ -8,6 +8,9 @@
  *
  * Every request must carry a device key, except redeeming an invite or setup code.
  * Keys and codes are stored only as SHA-256 hashes in the Devices and Invites tabs.
+ *
+ * Entries go in one tab per kind (Feeds, Pumps, Diapers, Sleep, Growth, Health, Activities).
+ * A sheet from before November 2026 keeps everything in one Log tab: run migrateToTabs once.
  */
 
 // If you fork this, change these two lines (see the README).
@@ -18,23 +21,39 @@ const PAIR_MINUTES = 15;     // setup codes (moving to the Home Screen app) expi
 const LIST_DAYS = 30;        // how much history the app downloads (Stats shows up to 30 days)
 const FAIL_LIMIT = 30;       // failed redeem attempts allowed per 10 minutes before redeem pauses
 
-const LOG = 'Log';
 const DEVICES = 'Devices';
 const INVITES = 'Invites';
 const PUSH = 'Push';
+const TIMELINE = 'Timeline';
+const LEGACY_LOG = 'Log';     // the single tab every entry went into before November 2026 (see migrateToTabs)
 const PUSH_HEADERS = ['Device ID', 'Name', 'Status', 'Subscription', 'Feed due after h', 'Long feed alert', 'Medicine alert', 'Updated'];
 
-const LOG_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
-  'End', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label', 'Left pumped', 'Right pumped', 'Pump unit', 'Pumped oz',
-  'Sleep min', 'Weight lb', 'Weight', 'Detail', 'Dose', 'Temp F', 'Temp', 'Remind h', 'Length in', 'Length', 'Activity min', 'Updated at'];
+// Each kind of entry has its own tab, and every tab ends with the same five columns. Each value is
+// stored once: amounts in ounces, inches and °F so totals and charts add up, plus "As entered" with
+// the mL, kg, cm or °C someone typed. The script finds columns by their header, so a column added
+// to a tab by hand (your own notes, say) is left alone.
+const SHARED_COLS = ['Notes', 'Logged by', 'Logged at', 'Updated at', 'ID'];
+const TABS = {
+  feed: { name: 'Feeds', cols: ['Time', 'Type', 'Left min', 'Right min', 'First side', 'Last side', 'End', 'Ounces', 'Milk', 'As entered'] },
+  pump: { name: 'Pumps', cols: ['Time', 'Side', 'Minutes', 'Left oz', 'Right oz', 'As entered', 'Label'] },
+  diaper: { name: 'Diapers', cols: ['Time', 'Kind'] },
+  sleep: { name: 'Sleep', cols: ['Time', 'Woke up'] },
+  growth: { name: 'Growth', cols: ['Time', 'Measure', 'Pounds', 'Ounces', 'Inches', 'As entered'] },
+  health: { name: 'Health', cols: ['Time', 'Type', 'Detail', 'Dose', 'Remind h', 'Temp °F', 'As entered'] },
+  activity: { name: 'Activities', cols: ['Time', 'Activity', 'Minutes'] }
+};
+const TAB_KEYS = Object.keys(TABS);
+const DATE_COLS = ['Time', 'End', 'Woke up', 'Logged at', 'Updated at'];
+const DATE_FORMAT = 'ddd m/d/yy h:mm am/pm';
+const headersOf_ = key => TABS[key].cols.concat(SHARED_COLS);
+const tabOf_ = type => (type === 'breast' || type === 'bottle' ? 'feed' : type === 'weight' || type === 'length' ? 'growth' : type);
+
 const ML_PER_OZ = 29.5735;
+const OZ_PER_KG = 35.27396;
 const CM_PER_IN = 2.54;
 const DEV_HEADERS = ['Name', 'Role', 'Status', 'Created', 'Last used', 'Device ID', 'Invited by', 'Key hash'];
 const INV_HEADERS = ['Name', 'Role', 'Kind', 'Status', 'Created', 'Expires', 'Used at', 'Device ID', 'Invite ID', 'Created by', 'Code hash'];
 
-// Log column positions (0-based)
-const L = { TIME: 0, EVENT: 1, LEFT: 2, RIGHT: 3, OZ: 4, FIRST: 5, LAST: 6, END: 7, BY: 8, AT: 9, NOTES: 10, ID: 11, AMOUNT: 12, UNIT: 13, MILK: 14, PSIDE: 15, PMIN: 16, LABEL: 17, PLEFT: 18, PRIGHT: 19, PUNIT: 20, POZ: 21, SLEEPMIN: 22, WLB: 23, WTXT: 24,
-  DETAIL: 25, DOSE: 26, TEMPF: 27, TEMP: 28, REMIND: 29, LIN: 30, LTXT: 31, AMIN: 32, UPD: 33 };
 const PUMP_SIDES = { L: 'Left', R: 'Right', B: 'Both' };
 const MILK = { breast: 'Breast milk', formula: 'Formula' };
 // Devices column positions
@@ -42,7 +61,7 @@ const D = { NAME: 0, ROLE: 1, STATUS: 2, CREATED: 3, USED: 4, ID: 5, BY: 6, HASH
 // Invites column positions
 const I = { NAME: 0, ROLE: 1, KIND: 2, STATUS: 3, CREATED: 4, EXPIRES: 5, USED: 6, DEVICE: 7, ID: 8, BY: 9, HASH: 10 };
 
-const DIAPER_EVENTS = { wet: 'Wet diaper', dirty: 'Dirty diaper', both: 'Wet + dirty diaper' };
+const DIAPER_KINDS = { wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' };
 const HEALTH_EVENTS = { med: 'Medicine', temp: 'Temperature', vaccine: 'Vaccine', symptom: 'Symptom', visit: 'Doctor visit' };
 
 /* ================================================================== */
@@ -79,7 +98,7 @@ function handle_(req) {
     case 'delete': return withLock_(() => remove_(req.id));
     case 'update': return withLock_(() => updateNote_(req.id, req.note));
     case 'endSleep': return withLock_(() => endSleep_(req.id, req.end, !!req.reopen));
-    case 'live': return withLock_(() => setLive_(dev, req.state));
+    case 'live': return withLock_(() => setLive_(dev, req.state, req.replace));
     case 'pushStatus': return pushStatus_(dev);
     case 'pushSubscribe': return withLock_(() => pushSubscribe_(dev, req.subscription, req.prefs));
     case 'pushUnsubscribe': return withLock_(() => pushUnsubscribe_(dev));
@@ -275,17 +294,16 @@ function setDeviceStatus_(deviceId, status) {
 function add_(dev, e) {
   const entry = validateEntry_(e, 'add');
   entry.note = cleanNote_(e && e.note);
-  const sh = logSheet_();
-  const ids = logIds_(sh);
-  if (ids.indexOf(entry.id) !== -1) return { entry: entry, duplicate: true };
-  const row = buildRow_(entry, new Array(LOG_HEADERS.length).fill(''));
-  row[L.BY] = dev.name;
-  row[L.AT] = new Date();
-  sh.appendRow(row);
+  const t = readTab_(tabOf_(entry.type));
+  if (t.rows.some(r => String(r[t.c.ID]) === entry.id)) return { entry: entry, duplicate: true };
+  const twin = voiceTwin_(t, entry);
+  if (twin) return { entry: twin, duplicate: true };
+  const rec = entryRec_(entry);
+  rec['Logged by'] = dev.name;
+  rec['Logged at'] = new Date();
+  appendRec_(t, rec);
   entry.by = dev.name;
-  // Saving the feed that the shared timer was running ends the timer for everyone
-  const live = getLive_();
-  if (live && live.id === entry.id) setProp_('live', null);
+  endLiveIf_(entry.id);
   return { entry: entry };
 }
 
@@ -293,86 +311,167 @@ function add_(dev, e) {
 function edit_(dev, e) {
   const entry = validateEntry_(e, 'edit');
   entry.note = cleanNote_(e && e.note);
-  const sh = logSheet_();
-  const i = logIds_(sh).indexOf(entry.id);
-  if (i === -1) throw fail_('bad_request', 'That entry no longer exists.');
-  const old = sh.getRange(i + 2, 1, 1, LOG_HEADERS.length).getValues()[0];
-  const row = new Array(LOG_HEADERS.length).fill('');
-  row[L.BY] = old[L.BY];
-  row[L.AT] = old[L.AT];
-  buildRow_(entry, row);
-  sh.getRange(i + 2, 1, 1, LOG_HEADERS.length).setValues([row]);
-  entry.by = String(old[L.BY] || '');
+  const key = tabOf_(entry.type);
+  const f = findEntry_(entry.id, key);
+  if (!f) throw fail_('bad_request', 'That entry no longer exists.');
+  const rec = entryRec_(entry);
+  const by = f.values[f.c['Logged by']], at = f.values[f.c['Logged at']];
+  if (f.key === key) {
+    const row = rowFrom_(f, rec, f.values);
+    f.sh.getRange(f.row, 1, 1, row.length).setValues([row]);
+    const was = f.values[f.c.Time];
+    if (!(was instanceof Date) || was.getTime() !== entry.t) sortTab_(f);
+  } else {   // it became a different kind of entry: it moves to that kind's tab
+    f.sh.deleteRow(f.row);
+    rec['Logged by'] = by;
+    rec['Logged at'] = at;
+    appendRec_(openTab_(key), rec);
+  }
+  entry.by = String(by || '');
+  endLiveIf_(entry.id);   // a feed continued on the shared timer and saved
   return { entry: entry };
 }
 
-// Fills a Log row from a validated entry (everything except Logged by / Logged at)
-function buildRow_(entry, row) {
-  row[L.TIME] = new Date(entry.t);
-  row[L.ID] = entry.id;
-  row[L.NOTES] = safeCell_(entry.note || '');
-  row[L.UPD] = new Date();
-  if (entry.type === 'breast') {
-    row[L.EVENT] = 'Breastfeed';
-    row[L.LEFT] = entry.left;
-    row[L.RIGHT] = entry.right;
-    row[L.FIRST] = entry.first === 'L' ? 'Left' : 'Right';
-    row[L.LAST] = entry.last === 'L' ? 'Left' : 'Right';
-    row[L.END] = new Date(entry.t + (entry.left + entry.right) * 60000);
-  } else if (entry.type === 'bottle') {
-    row[L.EVENT] = 'Bottle';
-    row[L.OZ] = entry.oz;            // always ounces, so sheet totals add up
-    row[L.AMOUNT] = entry.amount;    // exactly as entered
-    row[L.UNIT] = entry.unit === 'ml' ? 'mL' : 'oz';
-    row[L.MILK] = MILK[entry.source] || '';
-  } else if (entry.type === 'pump') {
-    row[L.EVENT] = 'Pump';
-    row[L.PSIDE] = PUMP_SIDES[entry.side];
-    row[L.PMIN] = entry.minutes;
-    row[L.LABEL] = safeCell_(entry.label);
-    if (entry.leftAmt != null || entry.rightAmt != null) {
-      row[L.PLEFT] = entry.leftAmt != null ? entry.leftAmt : '';
-      row[L.PRIGHT] = entry.rightAmt != null ? entry.rightAmt : '';
-      row[L.PUNIT] = entry.pumpUnit === 'ml' ? 'mL' : 'oz';
-      row[L.POZ] = entry.pumpedOz;
-    }
-    row[L.END] = new Date(entry.t + entry.minutes * 60000);
-  } else if (entry.type === 'sleep') {
-    row[L.EVENT] = 'Sleep';
-    if (entry.end) {           // an open sleep (still asleep) has no end yet
-      row[L.END] = new Date(entry.end);
-      row[L.SLEEPMIN] = entry.minutes;
-    }
-  } else if (entry.type === 'weight') {
-    row[L.EVENT] = 'Weight';
-    row[L.WLB] = Math.round(entry.weightOz / 16 * 1000) / 1000;
-    row[L.WTXT] = weightText_(entry.weightOz);
-  } else if (entry.type === 'length') {
-    row[L.EVENT] = 'Length';
-    row[L.LIN] = entry.lengthIn;
-    row[L.LTXT] = entry.lengthUnit === 'cm' ? (Math.round(entry.lengthIn * CM_PER_IN * 10) / 10) + ' cm' : entry.lengthIn + ' in';
-  } else if (entry.type === 'health') {
-    row[L.EVENT] = HEALTH_EVENTS[entry.kind];
-    row[L.DETAIL] = safeCell_(entry.detail);
-    if (entry.kind === 'med') {
-      row[L.DOSE] = safeCell_(entry.dose);
-      row[L.REMIND] = entry.remindHours || '';
-    }
-    if (entry.kind === 'temp') {
-      row[L.TEMPF] = entry.tempF;
-      row[L.TEMP] = entry.tempUnit === 'C' ? (Math.round((entry.tempF - 32) / 1.8 * 10) / 10) + ' °C' : entry.tempF + ' °F';
-    }
-  } else if (entry.type === 'activity') {
-    row[L.EVENT] = 'Activity';
-    row[L.DETAIL] = safeCell_(entry.detail);
-    if (entry.minutes) {
-      row[L.AMIN] = entry.minutes;
-      row[L.END] = new Date(entry.t + entry.minutes * 60000);
-    }
-  } else {
-    row[L.EVENT] = DIAPER_EVENTS[entry.kind];
+// Two speakers in the house can both hear "Hey Google, log a wet diaper" and each send it. A voice
+// entry identical to another voice entry from the same minute is that one command, kept once.
+function voiceTwin_(t, entry) {
+  if (!/^gh-/.test(entry.id)) return null;
+  const sig = sig_(entry);
+  for (let i = t.rows.length - 1; i >= 0 && i >= t.rows.length - 20; i--) {
+    const r = t.rows[i];
+    if (!/^gh-/.test(String(r[t.c.ID])) || !(r[t.c.Time] instanceof Date)) continue;
+    if (Math.abs(r[t.c.Time].getTime() - entry.t) > 60000) continue;
+    const other = recToEntry_(t, r);
+    if (other && sig_(other) === sig) return other;
   }
-  return row;
+  return null;
+}
+const sig_ = e => [e.type, e.kind || '', e.oz || '', e.source || ''].join('|');
+
+// The column values for a validated entry (all but Logged by and Logged at), keyed by header
+function entryRec_(e) {
+  const rec = { 'Time': new Date(e.t), 'Notes': safeCell_(e.note || ''), 'Updated at': new Date(), 'ID': e.id };
+  const r1 = n => Math.round(n * 10) / 10;
+  const sideName = s => (s === 'L' ? 'Left' : 'Right');
+  if (e.type === 'breast') {
+    Object.assign(rec, { 'Type': 'Breastfeed', 'Left min': e.left, 'Right min': e.right,
+      'First side': sideName(e.first), 'Last side': sideName(e.last), 'End': new Date(e.end) });
+  } else if (e.type === 'bottle') {
+    Object.assign(rec, { 'Type': 'Bottle', 'Ounces': e.oz, 'Milk': MILK[e.source] || '', 'As entered': e.unit === 'ml' ? e.amount + ' mL' : '' });
+  } else if (e.type === 'pump') {
+    const ml = e.pumpUnit === 'ml';
+    const oz = v => (v == null ? '' : ml ? Math.round(v / ML_PER_OZ * 100) / 100 : v);
+    const typed = [];
+    if (ml && e.leftAmt != null) typed.push('L ' + e.leftAmt + ' mL');
+    if (ml && e.rightAmt != null) typed.push('R ' + e.rightAmt + ' mL');
+    Object.assign(rec, { 'Side': PUMP_SIDES[e.side], 'Minutes': e.minutes, 'Left oz': oz(e.leftAmt), 'Right oz': oz(e.rightAmt),
+      'As entered': typed.join(', '), 'Label': safeCell_(e.label || '') });
+  } else if (e.type === 'sleep') {
+    rec['Woke up'] = e.end ? new Date(e.end) : '';   // empty while still asleep
+  } else if (e.type === 'weight') {
+    let lb = Math.floor(e.weightOz / 16), oz = r1(e.weightOz - lb * 16);
+    if (oz >= 16) { lb += 1; oz = 0; }
+    Object.assign(rec, { 'Measure': 'Weight', 'Pounds': lb, 'Ounces': oz,
+      'As entered': e.weightUnit === 'kg' ? (e.weightOz / OZ_PER_KG).toFixed(2) + ' kg' : '' });
+  } else if (e.type === 'length') {
+    Object.assign(rec, { 'Measure': 'Length', 'Inches': e.lengthIn, 'As entered': e.lengthUnit === 'cm' ? r1(e.lengthIn * CM_PER_IN) + ' cm' : '' });
+  } else if (e.type === 'health') {
+    Object.assign(rec, { 'Type': HEALTH_EVENTS[e.kind], 'Detail': safeCell_(e.detail || '') });
+    if (e.kind === 'med') { rec['Dose'] = safeCell_(e.dose || ''); rec['Remind h'] = e.remindHours || ''; }
+    if (e.kind === 'temp') { rec['Temp °F'] = e.tempF; rec['As entered'] = e.tempUnit === 'C' ? r1((e.tempF - 32) / 1.8) + ' °C' : ''; }
+  } else if (e.type === 'activity') {
+    Object.assign(rec, { 'Activity': safeCell_(e.detail), 'Minutes': e.minutes || '' });
+  } else {
+    rec['Kind'] = DIAPER_KINDS[e.kind];
+  }
+  return rec;
+}
+
+// The app's form of one row of tab t, or null for a row it can't show. Rows typed or fixed by hand
+// count: a hand edit of an amount wins over "As entered", which then no longer matches it.
+function recToEntry_(t, r) {
+  const c = t.c;
+  const v = h => (c[h] == null ? '' : r[c[h]]);
+  const time = v('Time');
+  if (!(time instanceof Date)) return null;
+  const base = { id: String(v('ID') || ''), t: time.getTime(), by: String(v('Logged by') || ''), note: String(v('Notes') || '') };
+  const num = h => { const x = v(h); return x === '' || x == null || !isFinite(Number(x)) ? null : Number(x); };
+  const text = h => String(v(h) == null ? '' : v(h)).trim();
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  const typed = unit => { const m = new RegExp('([0-9.]+)\\s*' + unit, 'i').exec(text('As entered')); return m ? Number(m[1]) : null; };
+  const sideOf = s => (/^r/i.test(s) ? 'R' : /^l/i.test(s) ? 'L' : '');
+
+  if (t.key === 'feed') {
+    const type = text('Type'), oz = num('Ounces');
+    if (/bottle/i.test(type) || (!/breast/i.test(type) && oz != null)) {
+      if (!(oz > 0)) return null;
+      const ml = typed('mL');
+      const useMl = ml != null && near(ml / ML_PER_OZ, oz, 0.011);
+      const milk = text('Milk');
+      return Object.assign(base, { type: 'bottle', oz: oz, amount: useMl ? ml : oz, unit: useMl ? 'ml' : 'oz',
+        source: /formula/i.test(milk) ? 'formula' : /breast/i.test(milk) ? 'breast' : '' });
+    }
+    const left = num('Left min') || 0, right = num('Right min') || 0;
+    if (!/breast/i.test(type) && !left && !right) return null;
+    const first = sideOf(text('First side')) || (left ? 'L' : 'R');
+    const last = sideOf(text('Last side')) || (left && right ? (first === 'L' ? 'R' : 'L') : first);
+    const minEnd = base.t + (left + right) * 60000;
+    const end = v('End') instanceof Date ? Math.max(v('End').getTime(), minEnd) : minEnd;
+    return Object.assign(base, { type: 'breast', left: left, right: right, first: first, last: last, end: end });
+  }
+  if (t.key === 'pump') {
+    const s = text('Side');
+    const side = /^b/i.test(s) ? 'B' : /^r/i.test(s) ? 'R' : 'L';
+    const lo = num('Left oz'), ro = num('Right oz');
+    const mlOf = k => { const m = new RegExp(k + '\\s*([0-9.]+)\\s*mL', 'i').exec(text('As entered')); return m ? Number(m[1]) : null; };
+    const lm = mlOf('L'), rm = mlOf('R');
+    const fits = (ml, oz) => (ml == null ? oz == null : oz != null && near(ml / ML_PER_OZ, oz, 0.011));
+    const useMl = (lm != null || rm != null) && fits(lm, lo) && fits(rm, ro);
+    return Object.assign(base, { type: 'pump', side: side, minutes: num('Minutes') || 0, label: text('Label'),
+      leftAmt: useMl ? lm : lo, rightAmt: useMl ? rm : ro, pumpUnit: useMl ? 'ml' : 'oz',
+      pumpedOz: lo == null && ro == null ? null : Math.round(((lo || 0) + (ro || 0)) * 100) / 100 });
+  }
+  if (t.key === 'diaper') {
+    const k = text('Kind');
+    const wet = /wet|pee/i.test(k), dirty = /dirty|poo/i.test(k);
+    if (!wet && !dirty) return null;
+    return Object.assign(base, { type: 'diaper', kind: wet && dirty ? 'both' : wet ? 'wet' : 'dirty' });
+  }
+  if (t.key === 'sleep') {
+    const w = v('Woke up');
+    const end = w instanceof Date && w.getTime() > base.t ? w.getTime() : null;
+    return Object.assign(base, { type: 'sleep', end: end, minutes: end ? Math.round((end - base.t) / 60000) : null });
+  }
+  if (t.key === 'growth') {
+    const m = text('Measure'), lb = num('Pounds'), oz = num('Ounces'), inches = num('Inches');
+    if (/length|height/i.test(m) || (!/weight/i.test(m) && inches != null && lb == null && oz == null)) {
+      if (!(inches > 0)) return null;
+      const cm = typed('cm');
+      return Object.assign(base, { type: 'length', lengthIn: inches, lengthUnit: cm != null && near(cm / CM_PER_IN, inches, 0.05) ? 'cm' : 'in' });
+    }
+    const total = Math.round(((lb || 0) * 16 + (oz || 0)) * 10) / 10;
+    if (!(total > 0)) return null;
+    const kg = typed('kg');
+    return Object.assign(base, { type: 'weight', weightOz: total, weightUnit: kg != null && near(kg * OZ_PER_KG, total, 0.5) ? 'kg' : 'lb' });
+  }
+  if (t.key === 'health') {
+    const type = text('Type').toLowerCase();
+    const kind = Object.keys(HEALTH_EVENTS).find(k => HEALTH_EVENTS[k].toLowerCase() === type);
+    if (!kind) return null;
+    const h = Object.assign(base, { type: 'health', kind: kind, detail: text('Detail') });
+    if (kind === 'med') { h.dose = text('Dose'); h.remindHours = num('Remind h') || 0; }
+    if (kind === 'temp') {
+      h.tempF = num('Temp °F');
+      const cel = typed('°?\\s*C\\b');
+      h.tempUnit = cel != null && h.tempF != null && near(cel * 1.8 + 32, h.tempF, 0.06) ? 'C' : 'F';
+    }
+    return h;
+  }
+  if (t.key === 'activity') {
+    if (!text('Activity')) return null;
+    return Object.assign(base, { type: 'activity', detail: text('Activity'), minutes: num('Minutes') || 0 });
+  }
+  return null;
 }
 
 function validateEntry_(e, mode) {
@@ -387,14 +486,19 @@ function validateEntry_(e, mode) {
   const maxDays = growth ? 366 : mode === 'edit' ? LIST_DAYS + 1 : 7;
   if (!(t > Date.now() - maxDays * 86400000 && t < Date.now() + 10 * 60000)) throw bad('The time must be within the last ' + maxDays + ' days');
   const side = s => (s === 'L' || s === 'R' ? s : null);
-  const mins = m => { const n = Math.round(Number(m) || 0); return n >= 0 && n <= 180 ? n : NaN; };
   const text = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f]/g, '').trim().slice(0, max);
 
   if (e.type === 'breast') {
+    // Up to 6 hours a side: a long cluster feed continued several times adds up
+    const mins = m => { const n = Math.round(Number(m) || 0); return n >= 0 && n <= 360 ? n : NaN; };
     const left = mins(e.left), right = mins(e.right);
-    if (isNaN(left) || isNaN(right)) throw bad('Minutes must be between 0 and 180');
+    if (isNaN(left) || isNaN(right)) throw bad('Minutes must be between 0 and 360');
     if (!side(e.first) || !side(e.last)) throw bad('Missing side');
-    return { id: id, type: 'breast', t: t, left: left, right: right, first: e.first, last: e.last };
+    // When the feed ended. With pauses it is later than the start plus the minutes.
+    const minEnd = t + (left + right) * 60000;
+    const x = e.end == null || e.end === '' ? NaN : Number(e.end);
+    const end = isFinite(x) ? Math.min(Math.max(x, minEnd), t + 12 * 3600000) : minEnd;
+    return { id: id, type: 'breast', t: t, left: left, right: right, first: e.first, last: e.last, end: end };
   }
   if (e.type === 'bottle') {
     const unit = e.unit === 'ml' ? 'ml' : 'oz';
@@ -433,7 +537,7 @@ function validateEntry_(e, mode) {
   if (e.type === 'weight') {
     const oz = Math.round(Number(e.weightOz) * 10) / 10;
     if (!(oz >= 16 && oz <= 640)) throw bad('Weight must be between 1 and 40 lb');
-    return { id: id, type: 'weight', t: t, weightOz: oz };
+    return { id: id, type: 'weight', t: t, weightOz: oz, weightUnit: e.weightUnit === 'kg' ? 'kg' : 'lb' };
   }
   if (e.type === 'length') {
     const lengthIn = Math.round(Number(e.lengthIn) * 100) / 100;
@@ -466,117 +570,52 @@ function validateEntry_(e, mode) {
     return { id: id, type: 'activity', t: t, detail: detail, minutes: minutes };
   }
   if (e.type === 'diaper') {
-    if (!DIAPER_EVENTS[e.kind]) throw bad('Unknown diaper type');
+    if (!DIAPER_KINDS[e.kind]) throw bad('Unknown diaper type');
     return { id: id, type: 'diaper', t: t, kind: e.kind };
   }
   throw bad('Unknown entry type');
 }
 
-// The whole recent log, or (with `since`) only rows changed after that time plus deleted ids.
+// Everything recent, or (with `since`) only rows changed after that time plus deleted ids.
 function list_(since) {
-  const sh = logSheet_();
-  const last = sh.getLastRow();
   const now = Date.now();
   const out = { entries: [], live: getLive_(), syncedAt: now };
   since = Number(since) || 0;
+  // A phone that last synced before the sheet was reorganized gets everything again
+  if (since && since < (Number(getProp_('migratedAt')) || 0)) since = 0;
+  const after = since - 5000;   // overlap a little; the app merges by id
+  const cutoff = now - LIST_DAYS * 86400000;
   if (since) {
     out.delta = true;
-    const after = since - 5000;   // overlap a little; the app merges by id
     out.deleted = (getProp_('deleted') || []).filter(d => d.at >= after).map(d => d.id);
-    if (last < 2) return out;
-    const upd = sh.getRange(2, L.UPD + 1, last - 1, 1).getValues();
-    let first = -1;
-    for (let i = 0; i < upd.length; i++) {
-      if (upd[i][0] instanceof Date && upd[i][0].getTime() >= after) { first = i; break; }
-    }
-    if (first === -1) return out;
-    const rows = sh.getRange(first + 2, 1, last - 1 - first, LOG_HEADERS.length).getValues();
-    rows.forEach((r, k) => {
-      if (!(r[L.UPD] instanceof Date) || r[L.UPD].getTime() < after || !(r[L.TIME] instanceof Date)) return;
-      const entry = rowToEntry_(r);
-      if (entry && entry.id) out.entries.push(entry);
-    });
-    return out;
   }
-  if (last < 2) return out;
-  const cols = Math.min(LOG_HEADERS.length, sh.getMaxColumns());
-  const rows = sh.getRange(2, 1, last - 1, cols).getValues();
-  const cutoff = now - LIST_DAYS * 86400000;
-  rows.forEach((r, i) => {
-    if (!(r[L.TIME] instanceof Date)) return;
-    // Weigh-ins and lengths are few, so all of them are sent for the growth charts; other entries only recent ones
-    const ev = String(r[L.EVENT]).trim();
-    if (r[L.TIME].getTime() < cutoff && ev !== 'Weight' && ev !== 'Length') return;
-    const entry = rowToEntry_(r);
-    if (!entry) return;
-    if (!entry.id) { // a row typed in by hand: give it an ID so the app can edit or delete it
-      entry.id = randomHex_(16);
-      sh.getRange(i + 2, L.ID + 1).setValue(entry.id);
-    }
-    out.entries.push(entry);
+  TAB_KEYS.forEach(key => {
+    const t = readTab_(key);
+    const T = t.c.Time, U = t.c['Updated at'];
+    t.rows.forEach((r, i) => {
+      if (!(r[T] instanceof Date)) return;
+      if (since) {
+        if (!(r[U] instanceof Date) || r[U].getTime() < after) return;
+      } else if (key !== 'growth' && r[T].getTime() < cutoff) {
+        return;   // measurements are few, so all are sent for the growth charts; other entries only recent ones
+      }
+      const entry = recToEntry_(t, r);
+      if (!entry) return;
+      if (!entry.id) {   // a row typed in by hand: give it an ID so the app can edit or delete it
+        if (since) return;
+        entry.id = randomHex_(16);
+        t.sh.getRange(i + 2, t.c.ID + 1).setValue(entry.id);
+      }
+      out.entries.push(entry);
+    });
   });
   out.entries.sort((a, b) => b.t - a.t);
   return out;
 }
 
-function rowToEntry_(r) {
-  const base = { id: String(r[L.ID] || ''), t: r[L.TIME].getTime(), by: String(r[L.BY] || ''), note: String(r[L.NOTES] || '') };
-  const ev = String(r[L.EVENT]).trim();
-  const sideOf = v => (/^r/i.test(String(v)) ? 'R' : /^l/i.test(String(v)) ? 'L' : '');
-  if (ev === 'Breastfeed') {
-    const left = Number(r[L.LEFT]) || 0, right = Number(r[L.RIGHT]) || 0;
-    const first = sideOf(r[L.FIRST]) || (left ? 'L' : 'R');
-    const last = sideOf(r[L.LAST]) || (left && right ? (first === 'L' ? 'R' : 'L') : first);
-    return Object.assign(base, { type: 'breast', left: left, right: right, first: first, last: last });
-  }
-  if (ev === 'Bottle') {
-    const oz = Number(r[L.OZ]) || 0;
-    const unit = /ml/i.test(String(r[L.UNIT] || '')) ? 'ml' : 'oz';
-    const amount = Number(r[L.AMOUNT]) || (unit === 'ml' ? Math.round(oz * ML_PER_OZ * 10) / 10 : oz);
-    const milk = String(r[L.MILK] || '');
-    const source = /formula/i.test(milk) ? 'formula' : /breast/i.test(milk) ? 'breast' : '';
-    return Object.assign(base, { type: 'bottle', oz: oz, amount: amount, unit: unit, source: source });
-  }
-  if (ev === 'Pump') {
-    const sideText = String(r[L.PSIDE] || '');
-    const side = /^b/i.test(sideText) ? 'B' : /^r/i.test(sideText) ? 'R' : 'L';
-    const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
-    return Object.assign(base, { type: 'pump', side: side, minutes: Number(r[L.PMIN]) || 0, label: String(r[L.LABEL] || ''),
-      leftAmt: num(r[L.PLEFT]), rightAmt: num(r[L.PRIGHT]), pumpUnit: /ml/i.test(String(r[L.PUNIT] || '')) ? 'ml' : 'oz', pumpedOz: num(r[L.POZ]) });
-  }
-  if (ev === 'Sleep') {
-    const end = r[L.END] instanceof Date ? r[L.END].getTime() : null;
-    return Object.assign(base, { type: 'sleep', end: end, minutes: end ? Math.round((end - base.t) / 60000) : null });
-  }
-  if (ev === 'Weight') {
-    const lb = Number(r[L.WLB]);
-    if (!(lb > 0)) return null;
-    return Object.assign(base, { type: 'weight', weightOz: Math.round(lb * 16 * 10) / 10 });
-  }
-  if (ev === 'Length') {
-    const inches = Number(r[L.LIN]);
-    if (!(inches > 0)) return null;
-    return Object.assign(base, { type: 'length', lengthIn: inches, lengthUnit: /cm/i.test(String(r[L.LTXT] || '')) ? 'cm' : 'in' });
-  }
-  if (ev === 'Activity') {
-    return Object.assign(base, { type: 'activity', detail: String(r[L.DETAIL] || ''), minutes: Number(r[L.AMIN]) || 0 });
-  }
-  for (const k in HEALTH_EVENTS) {
-    if (HEALTH_EVENTS[k] !== ev) continue;
-    const h = Object.assign(base, { type: 'health', kind: k, detail: String(r[L.DETAIL] || '') });
-    if (k === 'med') { h.dose = String(r[L.DOSE] || ''); h.remindHours = Number(r[L.REMIND]) || 0; }
-    if (k === 'temp') { h.tempF = Number(r[L.TEMPF]) || null; h.tempUnit = /C/.test(String(r[L.TEMP] || '')) ? 'C' : 'F'; }
-    return h;
-  }
-  for (const k in DIAPER_EVENTS) if (DIAPER_EVENTS[k] === ev) return Object.assign(base, { type: 'diaper', kind: k });
-  return null;
-}
-
 function remove_(id) {
-  const sh = logSheet_();
-  const ids = logIds_(sh);
-  const i = ids.indexOf(String(id));
-  if (i !== -1) sh.deleteRow(i + 2);
+  const f = findEntry_(id);
+  if (f) f.sh.deleteRow(f.row);
   // Remember recent deletions so phones that sync only changes hear about them. Phones also
   // download everything at least every 10 minutes, so two days (or the last 100) is plenty, and
   // keeps this under the 9 KB a script property can hold.
@@ -590,12 +629,11 @@ function remove_(id) {
 }
 
 function updateNote_(id, note) {
-  const sh = logSheet_();
-  const i = logIds_(sh).indexOf(String(id));
-  if (i === -1) throw fail_('bad_request', 'That entry no longer exists.');
+  const f = findEntry_(id);
+  if (!f) throw fail_('bad_request', 'That entry no longer exists.');
   const clean = cleanNote_(note);
-  sh.getRange(i + 2, L.NOTES + 1).setValue(safeCell_(clean));
-  sh.getRange(i + 2, L.UPD + 1).setValue(new Date());
+  f.sh.getRange(f.row, f.c.Notes + 1).setValue(safeCell_(clean));
+  f.sh.getRange(f.row, f.c['Updated at'] + 1).setValue(new Date());
   return { id: String(id), note: clean };
 }
 
@@ -609,47 +647,112 @@ function sleepEnd_(start, end) {
 // Ends an open sleep (one person can start it and another end it). The first wake-up wins: a
 // second phone ending the same sleep gets the time already saved. `reopen` undoes an ending.
 function endSleep_(id, end, reopen) {
-  const sh = logSheet_();
-  const i = logIds_(sh).indexOf(String(id));
-  if (i === -1) throw fail_('bad_request', 'That sleep no longer exists.');
-  const row = sh.getRange(i + 2, 1, 1, L.END + 1).getValues()[0];
-  if (String(row[L.EVENT]).trim() !== 'Sleep' || !(row[L.TIME] instanceof Date)) throw fail_('bad_request', 'That entry is not a sleep.');
-  const start = row[L.TIME].getTime();
+  const f = findEntry_(id, 'sleep');
+  if (!f) throw fail_('bad_request', 'That sleep no longer exists.');
+  const time = f.values[f.c.Time];
+  if (f.key !== 'sleep' || !(time instanceof Date)) throw fail_('bad_request', 'That entry is not a sleep.');
+  const start = time.getTime();
+  const set = (h, v) => f.sh.getRange(f.row, f.c[h] + 1).setValue(v);
   if (reopen) {
-    sh.getRange(i + 2, L.END + 1).setValue('');
-    sh.getRange(i + 2, L.SLEEPMIN + 1).setValue('');
-    sh.getRange(i + 2, L.UPD + 1).setValue(new Date());
+    set('Woke up', '');
+    set('Updated at', new Date());
     return { id: String(id), end: null, minutes: null };
   }
-  if (row[L.END] instanceof Date) {
-    const had = row[L.END].getTime();
-    return { id: String(id), end: had, minutes: Math.round((had - start) / 60000), already: true };
+  const woke = f.values[f.c['Woke up']];
+  if (woke instanceof Date) {
+    return { id: String(id), end: woke.getTime(), minutes: Math.round((woke.getTime() - start) / 60000), already: true };
   }
   const s = sleepEnd_(start, Number(end));
-  sh.getRange(i + 2, L.END + 1).setValue(new Date(s.end));
-  sh.getRange(i + 2, L.SLEEPMIN + 1).setValue(s.minutes);
-  sh.getRange(i + 2, L.UPD + 1).setValue(new Date());
+  set('Woke up', new Date(s.end));
+  set('Updated at', new Date());
   return { id: String(id), end: s.end, minutes: s.minutes };
 }
 
-function weightText_(oz) {
-  let lb = Math.floor(oz / 16);
-  let rest = Math.round((oz - lb * 16) * 10) / 10;
-  if (rest >= 16) { lb += 1; rest = 0; }
-  return lb + ' lb ' + rest + ' oz';
+/* Tabs: finding columns and rows */
+
+// A tab's sheet and where each of its columns is. A column the script needs but the tab lacks
+// (after an update adds one, say) is added at the end.
+function openTab_(key) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(TABS[key].name);
+  if (!sh) throw notSetUp_();
+  const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => String(h).trim());
+  while (head.length && !head[head.length - 1]) head.pop();
+  headersOf_(key).forEach(h => {
+    if (head.indexOf(h) !== -1) return;
+    if (sh.getMaxColumns() <= head.length) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
+    head.push(h);
+    sh.getRange(1, head.length).setValue(h);
+  });
+  const c = {};
+  head.forEach((h, i) => { if (h && !(h in c)) c[h] = i; });
+  return { key: key, sh: sh, head: head, c: c };
 }
 
-function logIds_(sh) {
-  const last = sh.getLastRow();
-  if (last < 2) return [];
-  return sh.getRange(2, L.ID + 1, last - 1, 1).getValues().map(r => String(r[0]));
+// The tab plus all of its rows (without the header)
+function readTab_(key) {
+  const t = openTab_(key);
+  const last = t.sh.getLastRow();
+  t.rows = last < 2 ? [] : t.sh.getRange(2, 1, last - 1, t.head.length).getValues();
+  return t;
 }
 
-// The Log tab, widened if an older sheet has fewer columns than the app now writes
-function logSheet_() {
-  const sh = sheet_(LOG);
-  if (sh.getMaxColumns() < LOG_HEADERS.length) sh.insertColumnsAfter(sh.getMaxColumns(), LOG_HEADERS.length - sh.getMaxColumns());
-  return sh;
+// Finds an entry's row by its ID, looking in tab `first` before the others
+function findEntry_(id, first) {
+  id = String(id || '');
+  if (!id) return null;
+  const keys = first ? [first].concat(TAB_KEYS.filter(k => k !== first)) : TAB_KEYS;
+  for (let k = 0; k < keys.length; k++) {
+    const t = openTab_(keys[k]);
+    const last = t.sh.getLastRow();
+    if (last < 2) continue;
+    const ids = t.sh.getRange(2, t.c.ID + 1, last - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) !== id) continue;
+      t.row = i + 2;
+      t.values = t.sh.getRange(t.row, 1, 1, t.head.length).getValues()[0];
+      return t;
+    }
+  }
+  return null;
+}
+
+// A row for tab t. The columns the script manages come from rec (Logged by and Logged at only when
+// rec has them); any other column keeps what `base` had, such as a column added by hand.
+function rowFrom_(t, rec, base) {
+  const row = base ? base.slice() : [];
+  while (row.length < t.head.length) row.push('');
+  headersOf_(t.key).forEach(h => {
+    if ((h === 'Logged by' || h === 'Logged at') && !(h in rec)) return;
+    row[t.c[h]] = h in rec ? rec[h] : '';
+  });
+  return row;
+}
+
+// Adds a row. Rows stay in time order: one logged late or backdated is moved into place.
+function appendRec_(t, rec) {
+  const last = t.sh.getLastRow();
+  t.sh.appendRow(rowFrom_(t, rec, null));
+  if (last >= 2) {
+    const prev = t.sh.getRange(last, t.c.Time + 1).getValue();
+    if (prev instanceof Date && prev.getTime() > rec.Time.getTime()) sortTab_(t);
+  }
+}
+
+function sortTab_(t) {
+  const last = t.sh.getLastRow();
+  if (last > 2) t.sh.getRange(2, 1, last - 1, Math.max(t.head.length, t.sh.getLastColumn())).sort({ column: t.c.Time + 1, ascending: true });
+}
+
+function notSetUp_() {
+  const old = SpreadsheetApp.getActive().getSheetByName(LEGACY_LOG);
+  return fail_('not_set_up', old ? 'The sheet needs its one-time update: in Apps Script, run migrateToTabs (see the README).'
+    : 'Run setup in the Apps Script editor first.');
+}
+
+// Saving the feed the shared timer was running ends the timer for everyone
+function endLiveIf_(id) {
+  const live = getLive_();
+  if (live && live.id === id) setProp_('live', null);
 }
 
 /* ================================================================== */
@@ -657,12 +760,12 @@ function logSheet_() {
 /* ================================================================== */
 
 // One timer for the household, so every phone sees a feed in progress and anyone can switch
-// sides, pause or save it. Stored in the script's properties, not the Log, until it is saved.
+// sides, pause or save it. Stored in the script's properties, not the sheet, until it is saved.
 function getLive_() {
   return getProp_('live') || null;
 }
 
-function setLive_(dev, state) {
+function setLive_(dev, state, replace) {
   if (state == null) { setProp_('live', null); return { live: null }; }
   if (typeof state !== 'object') throw fail_('bad_request', 'Bad timer');
   const id = String(state.id || '');
@@ -671,12 +774,17 @@ function setLive_(dev, state) {
   const s = {
     id: id, start: n(state.start), first: state.first === 'R' ? 'R' : 'L', side: state.side === 'R' ? 'R' : 'L',
     running: !!state.running, segStart: n(state.segStart), left: Math.max(0, n(state.left)), right: Math.max(0, n(state.right)),
-    note: cleanNote_(state.note), by: String(state.by || dev.name).slice(0, 40), updatedAt: Date.now()
+    note: cleanNote_(state.note), by: String(state.by || dev.name).slice(0, 40), updatedAt: Date.now(),
+    continues: !!state.continues   // adding to a feed that ended a few minutes ago (saved as an edit of it)
   };
+  if (s.continues) {   // what the earlier feed already had, so any phone can split the new part off again
+    Object.assign(s, { baseLeft: Math.max(0, n(state.baseLeft)), baseRight: Math.max(0, n(state.baseRight)),
+      contStart: n(state.contStart) || s.start, contFirst: state.contFirst === 'R' ? 'R' : 'L' });
+  }
   if (!(s.start > Date.now() - 12 * 3600000 && s.start < Date.now() + 10 * 60000)) throw fail_('bad_request', 'Bad timer start');
   const cur = getLive_();
   // A different feed already running wins over a stale one from another phone
-  if (cur && cur.id !== s.id && !state.replace && Date.now() - cur.updatedAt < 12 * 3600000) return { live: cur, conflict: true };
+  if (cur && cur.id !== s.id && !(replace || state.replace) && Date.now() - cur.updatedAt < 12 * 3600000) return { live: cur, conflict: true };
   setProp_('live', s);
   return { live: s };
 }
@@ -794,7 +902,7 @@ function checkAlerts() {
   const tz = Session.getScriptTimeZone();
   const at = t => Utilities.formatDate(new Date(t), tz, 'h:mm a');
   const dur = ms => { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? h + 'h ' + (m % 60) + 'm' : m + 'm'; };
-  const entries = recentEntries_(3);
+  const entries = recentEntries_(3, ['feed', 'health']);
   const live = getLive_();
   const sent = getProp_('sent') || {};
   Object.keys(sent).forEach(k => { if (now - sent[k] > 36 * 3600000) delete sent[k]; });   // stays well under 9 KB
@@ -833,16 +941,22 @@ function checkAlerts() {
   setProp_('sent', sent);
 }
 
-// Entries from the last `days` days, read from the end of the Log (newest rows)
-function recentEntries_(days) {
-  const sh = sheet_(LOG);
-  const last = sh.getLastRow();
-  if (last < 2) return [];
-  const from = Math.max(2, last - 799);
+// Entries from the last `days` days in the given tabs, read from the end of each (newest rows)
+function recentEntries_(days, keys) {
   const cutoff = Date.now() - days * 86400000;
-  return sh.getRange(from, 1, last - from + 1, LOG_HEADERS.length).getValues()
-    .filter(r => r[L.TIME] instanceof Date && r[L.TIME].getTime() >= cutoff)
-    .map(rowToEntry_).filter(e => e);
+  const out = [];
+  (keys || TAB_KEYS).forEach(key => {
+    const t = openTab_(key);
+    const last = t.sh.getLastRow();
+    if (last < 2) return;
+    const from = Math.max(2, last - 799);
+    t.sh.getRange(from, 1, last - from + 1, t.head.length).getValues().forEach(r => {
+      if (!(r[t.c.Time] instanceof Date) || r[t.c.Time].getTime() < cutoff) return;
+      const e = recToEntry_(t, r);
+      if (e) out.push(e);
+    });
+  });
+  return out;
 }
 
 // Hands notifications to the cloud service, which encrypts and delivers them
@@ -863,6 +977,7 @@ function sendPush_(cfg, msgs) {
   return res;
 }
 
+
 /* ================================================================== */
 /* One-time setup (run from the Apps Script editor)                    */
 /* ================================================================== */
@@ -870,12 +985,20 @@ function sendPush_(cfg, msgs) {
 /** Step 1: run once. Creates the tabs. Safe to run again: it only adds what is missing. */
 function setup() {
   const ss = SpreadsheetApp.getActive();
-  let log = ss.getSheetByName(LOG);
-  if (!log) log = createLogTab_(ss);
-  if (!ss.getSheetByName('Dashboard')) buildDashboard_(ss.insertSheet('Dashboard', 0));
-  if (!ss.getSheetByName('Daily')) buildDaily_(ss.insertSheet('Daily', 2));
-  if (log.getMaxColumns() < LOG_HEADERS.length) log.insertColumnsAfter(log.getMaxColumns(), LOG_HEADERS.length - log.getMaxColumns());
-  log.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]);
+  if (!ss.getSheetByName(TABS.feed.name)) {
+    const old = ss.getSheetByName(LEGACY_LOG);
+    if (old && old.getLastRow() >= 2) {
+      Logger.log('This sheet still keeps everything in the one Log tab. Run migrateToTabs once to give each kind of entry its own tab.');
+    } else {
+      createEntryTabs_(ss);
+    }
+  }
+  if (ss.getSheetByName(TABS.feed.name)) {
+    createEntryTabs_(ss);   // any tab added by a later update
+    if (!ss.getSheetByName('Dashboard')) buildDashboard_(ss.insertSheet('Dashboard', 0));
+    if (!ss.getSheetByName('Daily')) buildDaily_(ss.insertSheet('Daily', Math.min(1, ss.getNumSheets())));
+    if (!ss.getSheetByName(TIMELINE)) buildTimeline_(ss.insertSheet(TIMELINE, Math.min(2, ss.getNumSheets())));
+  }
   ensureTab_(DEVICES, DEV_HEADERS);
   ensureTab_(INVITES, INV_HEADERS);
   Logger.log('Setup done. Next: Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).');
@@ -891,120 +1014,399 @@ function createOwnerInvite() {
 /* A Baby Log menu in the sheet */
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Baby Log')
-    .addItem('Rebuild Dashboard and Daily tabs', 'rebuildSummaries')
+    .addItem('Rebuild Dashboard, Daily and Timeline tabs', 'rebuildSummaries')
     .addItem('Turn on reminders', 'setupReminders')
     .addToUi();
 }
 
-/** Replaces the Dashboard and Daily tabs with the current version (they hold only formulas). */
+/** Replaces the Dashboard, Daily and Timeline tabs with the current version (they hold only formulas). */
 function rebuildSummaries() {
   const ss = SpreadsheetApp.getActive();
   let ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch (e) { /* run from the editor: no dialog */ }
+  if (!ss.getSheetByName(TABS.feed.name)) {
+    const msg = 'Run migrateToTabs first: the summary tabs read the Feeds, Pumps, Diapers and other tabs it creates.';
+    if (ui) ui.alert(msg); else Logger.log(msg);
+    return;
+  }
   if (ui) {
-    const ok = ui.alert('Rebuild summary tabs', 'This replaces the Dashboard and Daily tabs. Anything you added to those two tabs will be lost. The Log is not touched.', ui.ButtonSet.OK_CANCEL);
+    const ok = ui.alert('Rebuild summary tabs', 'This replaces the Dashboard, Daily and Timeline tabs. Anything you added to those tabs will be lost. Your entries are not touched.', ui.ButtonSet.OK_CANCEL);
     if (ok !== ui.Button.OK) return;
   }
-  ['Dashboard', 'Daily'].forEach(n => { const s = ss.getSheetByName(n); if (s) ss.deleteSheet(s); });
+  buildSummaries_(ss);
+  if (ui) ui.alert('Done.');
+}
+
+function buildSummaries_(ss) {
+  ['Dashboard', 'Daily', TIMELINE].forEach(n => { const s = ss.getSheetByName(n); if (s) ss.deleteSheet(s); });
   buildDashboard_(ss.insertSheet('Dashboard', 0));
-  buildDaily_(ss.insertSheet('Daily', 2));
-  if (ui) ui.alert('Done. The Dashboard and Daily tabs now include pumps, milk removal, sleep, growth and medicine.');
+  buildDaily_(ss.insertSheet('Daily', Math.min(1, ss.getNumSheets())));
+  buildTimeline_(ss.insertSheet(TIMELINE, Math.min(2, ss.getNumSheets())));
 }
 
-/* Tabs for a brand-new sheet. setup() only creates the ones that are missing. */
+// The entry tabs that are missing, placed after the summary tabs
+function createEntryTabs_(ss) {
+  TAB_KEYS.forEach((key, i) => {
+    if (ss.getSheetByName(TABS[key].name)) return;
+    const first = ss.getSheets()[0];
+    const blank = ss.getSheets().length === 1 && first.getLastRow() === 0;
+    const sh = blank ? first.setName(TABS[key].name) : ss.insertSheet(TABS[key].name, Math.min(3 + i, ss.getNumSheets()));
+    const head = headersOf_(key);
+    if (sh.getMaxColumns() < head.length) sh.insertColumnsAfter(sh.getMaxColumns(), head.length - sh.getMaxColumns());
+    sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+    formatRows_(sh, head, 2, sh.getMaxRows() - 1);
+    sh.setColumnWidth(1, 170);
+  });
+}
 
-function createLogTab_(ss) {
-  const first = ss.getSheets()[0];
-  const blank = ss.getSheets().length === 1 && first.getLastRow() === 0;
-  const sh = blank ? first.setName(LOG) : ss.insertSheet(LOG);
-  if (sh.getMaxColumns() < LOG_HEADERS.length) sh.insertColumnsAfter(sh.getMaxColumns(), LOG_HEADERS.length - sh.getMaxColumns());
-  sh.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]).setFontWeight('bold')
-    .setBackground('#263238').setFontColor('#FFFFFF');
+function formatRows_(sh, head, from, n) {
+  if (n < 1) return;
+  head.forEach((h, i) => {
+    if (DATE_COLS.indexOf(h) !== -1) sh.getRange(from, i + 1, n, 1).setNumberFormat(DATE_FORMAT);
+    if (h === 'ID') sh.getRange(from, i + 1, n, 1).setNumberFormat('@');
+  });
+}
+
+/* ================================================================== */
+/* One-time update: one tab per kind of entry (November 2026)          */
+/* ================================================================== */
+
+// The columns of the old single Log tab
+const LEGACY_HEADERS = ['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side',
+  'End', 'Logged by', 'Logged at', 'Notes', 'ID', 'Amount', 'Unit', 'Milk', 'Pump side', 'Pump min', 'Label', 'Left pumped', 'Right pumped', 'Pump unit', 'Pumped oz',
+  'Sleep min', 'Weight lb', 'Weight', 'Detail', 'Dose', 'Temp F', 'Temp', 'Remind h', 'Length in', 'Length', 'Activity min', 'Updated at'];
+const LEGACY_DIAPERS = { 'Wet diaper': 'wet', 'Dirty diaper': 'dirty', 'Wet + dirty diaper': 'both' };
+const MERGE_GAP_MIN = 30;    // breastfeed pieces this close together are one feed
+const DOUBLE_OVERLAP_MIN = 10;   // a piece starting this long before the previous one ended is the same feed logged twice
+
+/**
+ * Run once, from the Apps Script editor, then publish a new version of the web app.
+ * Moves every entry from the old Log tab into a tab per kind of entry (Feeds, Pumps, Diapers,
+ * Sleep, Growth, Health, Activities), each value stored once. Along the way:
+ *  - A breastfeed logged in pieces (one side, a pause, the other side) becomes one feed when each
+ *    piece started within 30 minutes of the previous piece ending.
+ *  - A voice command that two speakers both logged (identical, within a minute) is kept once.
+ *  - Bottle ounces come from the "Bottle oz" column, so a fix made there by hand stands.
+ * The old tab is kept as "Log (archive)" and nothing in it changes. The execution log lists
+ * everything that was merged, dropped or left out.
+ */
+function migrateToTabs() {
+  return withLock_(() => {
+    const ss = SpreadsheetApp.getActive();
+    if (ss.getSheetByName(TABS.feed.name)) { Logger.log('Nothing to do: this sheet already has a Feeds tab.'); return ['already']; }
+    const log = ss.getSheetByName(LEGACY_LOG);
+    const report = [];
+    const res = log && log.getLastRow() >= 2
+      ? legacyEntries_(log.getRange(1, 1, log.getLastRow(), log.getLastColumn()).getValues(), report)
+      : { items: [], skipped: [] };
+    const items = mergeLegacy_(res.items, report);
+
+    createEntryTabs_(ss);
+    const byTab = {};
+    items.forEach(it => { const k = tabOf_(it.entry.type); (byTab[k] = byTab[k] || []).push(it); });
+    const now = new Date();
+    const counts = [];
+    TAB_KEYS.forEach(key => {
+      const list = (byTab[key] || []).sort((a, b) => a.entry.t - b.entry.t);
+      counts.push(TABS[key].name + ' ' + list.length);
+      if (!list.length) return;
+      const t = openTab_(key);
+      const rows = list.map(it => {
+        const rec = entryRec_(it.entry);
+        rec['Logged by'] = it.by;
+        rec['Logged at'] = it.at;
+        rec['Updated at'] = now;
+        return rowFrom_(t, rec, null);
+      });
+      const need = rows.length + 1 - t.sh.getMaxRows();
+      if (need > 0) { t.sh.insertRowsAfter(t.sh.getMaxRows(), need + 100); formatRows_(t.sh, t.head, 2, t.sh.getMaxRows() - 1); }
+      t.sh.getRange(2, 1, rows.length, t.head.length).setValues(rows);
+    });
+    if (log) log.setName(LEGACY_LOG + ' (archive)');
+    buildSummaries_(ss);
+    ensureTab_(DEVICES, DEV_HEADERS);
+    ensureTab_(INVITES, INV_HEADERS);
+    setProp_('migratedAt', Date.now());   // phones download everything again on their next sync
+
+    if (res.skipped.length) report.push('Left in "Log (archive)" only (no time, or an event the app does not know): rows ' + res.skipped.join(', '));
+    report.unshift('Done. The ' + res.items.length + ' rows of the Log are now: ' + counts.join(', ') + '.');
+    report.push('Next: publish a new version of the web app (Deploy > Manage deployments > edit > New version).');
+    Logger.log(report.join('\n'));
+    try { SpreadsheetApp.getUi().alert('Baby Log update', report.join('\n\n'), SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) { /* run from the editor */ }
+    return report;
+  });
+}
+
+// The old Log's rows as entries, plus who logged each and when. Older sheets used a few other
+// column names; columns an older sheet never had are read as empty.
+function legacyEntries_(all, report) {
+  const head = all[0].map(h => String(h).trim());
+  const alias = { 'End': 'Feed end', 'Logged by': 'Logged via' };
+  const col = {};
+  LEGACY_HEADERS.forEach(h => { const i = head.indexOf(h) !== -1 ? head.indexOf(h) : head.indexOf(alias[h] || h); col[h] = i; });
+  const items = [], skipped = [];
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i], row = i + 1;
+    const g = h => (col[h] == null || col[h] < 0 ? '' : r[col[h]]);
+    const num = h => { const x = g(h); return x === '' || x == null || !isFinite(Number(x)) ? null : Number(x); };
+    const str = h => String(g(h) == null ? '' : g(h)).trim();
+    const time = g('Time');
+    if (!(time instanceof Date)) { if (r.some(v => v !== '' && v != null)) skipped.push(row); continue; }
+    const t = time.getTime();
+    const ev = str('Event');
+    const sideOf = s => (/^r/i.test(s) ? 'R' : /^l/i.test(s) ? 'L' : '');
+    let e = null;
+    if (ev === 'Breastfeed') {
+      const left = Math.round(num('Left min') || 0), right = Math.round(num('Right min') || 0);
+      const first = sideOf(str('First side')) || (left ? 'L' : 'R');
+      const last = sideOf(str('Last side')) || (left && right ? (first === 'L' ? 'R' : 'L') : first);
+      const minEnd = t + (left + right) * 60000;
+      e = { type: 'breast', left: left, right: right, first: first, last: last, end: g('End') instanceof Date ? Math.max(g('End').getTime(), minEnd) : minEnd };
+    } else if (ev === 'Bottle') {
+      const milk = str('Milk');
+      const source = /formula/i.test(milk) ? 'formula' : /breast/i.test(milk) ? 'breast' : '';
+      const oz = num('Bottle oz'), amt = num('Amount');
+      if (/ml/i.test(str('Unit')) && amt != null) {
+        const fromMl = Math.round(amt / ML_PER_OZ * 100) / 100;
+        if (oz != null && Math.abs(fromMl - oz) > 0.011) {
+          report.push('Row ' + row + ': bottle was ' + amt + ' mL but ' + oz + ' oz in "Bottle oz"; kept ' + oz + ' oz.');
+          e = { type: 'bottle', oz: oz, amount: oz, unit: 'oz', source: source };
+        } else {
+          e = { type: 'bottle', oz: fromMl, amount: amt, unit: 'ml', source: source };
+        }
+      } else {
+        const v = oz != null ? oz : amt;
+        if (oz != null && amt != null && oz !== amt) report.push('Row ' + row + ': bottle amount ' + amt + ' oz, but ' + oz + ' oz in "Bottle oz"; kept ' + oz + ' oz.');
+        if (v > 0) e = { type: 'bottle', oz: v, amount: v, unit: 'oz', source: source };
+      }
+    } else if (ev === 'Pump') {
+      const s = str('Pump side');
+      const side = /^b/i.test(s) ? 'B' : /^r/i.test(s) ? 'R' : 'L';
+      e = { type: 'pump', side: side, minutes: Math.round(num('Pump min') || 0), label: str('Label'),
+        leftAmt: num('Left pumped'), rightAmt: num('Right pumped'), pumpUnit: /ml/i.test(str('Pump unit')) ? 'ml' : 'oz' };
+    } else if (ev === 'Sleep') {
+      const end = g('End') instanceof Date && g('End').getTime() > t ? g('End').getTime() : null;
+      e = { type: 'sleep', end: end, minutes: end ? Math.round((end - t) / 60000) : null };
+    } else if (ev === 'Weight') {
+      const lb = num('Weight lb');
+      if (lb > 0) e = { type: 'weight', weightOz: Math.round(lb * 16 * 10) / 10, weightUnit: /kg/i.test(str('Weight')) ? 'kg' : 'lb' };
+    } else if (ev === 'Length') {
+      const inches = num('Length in');
+      if (inches > 0) e = { type: 'length', lengthIn: inches, lengthUnit: /cm/i.test(str('Length')) ? 'cm' : 'in' };
+    } else if (ev === 'Activity') {
+      e = { type: 'activity', detail: str('Detail') || 'Activity', minutes: Math.round(num('Activity min') || 0) };
+    } else if (LEGACY_DIAPERS[ev]) {
+      e = { type: 'diaper', kind: LEGACY_DIAPERS[ev] };
+    } else {
+      const kind = Object.keys(HEALTH_EVENTS).find(k => HEALTH_EVENTS[k] === ev);
+      if (kind) {
+        e = { type: 'health', kind: kind, detail: str('Detail') };
+        if (kind === 'med') { e.dose = str('Dose'); e.remindHours = num('Remind h') || 0; }
+        if (kind === 'temp') { e.tempF = num('Temp F'); e.tempUnit = /C/.test(str('Temp')) ? 'C' : 'F'; }
+      }
+    }
+    if (!e) { skipped.push(row); continue; }
+    e.id = str('ID') || randomHex_(16);
+    e.t = t;
+    e.note = str('Notes');
+    items.push({ entry: e, by: str('Logged by'), at: g('Logged at') instanceof Date ? g('Logged at') : '', row: row });
+  }
+  return { items: items, skipped: skipped };
+}
+
+// Drops voice doubles and joins breastfeed pieces (see migrateToTabs). Returns entries in time order.
+function mergeLegacy_(items, report) {
+  const at = t => Utilities.formatDate(new Date(t), Session.getScriptTimeZone(), 'M/d h:mm a');
+  items.sort((a, b) => a.entry.t - b.entry.t || a.row - b.row);
+  const voice = it => /^gh-/.test(it.entry.id) || it.by === 'Google Home';
+  const kept = [];
+  const dropped = [];
+  items.forEach(it => {
+    if (voice(it)) {
+      const twin = kept.slice(-10).find(k => voice(k) && it.entry.t - k.entry.t <= 60000 && sig_(k.entry) === sig_(it.entry));
+      if (twin) { dropped.push('row ' + it.row + ' (same as row ' + twin.row + ', ' + at(it.entry.t) + ')'); return; }
+    }
+    kept.push(it);
+  });
+  if (dropped.length) report.push('Voice commands logged twice, kept once: ' + dropped.join('; ') + '.');
+
+  const out = [];
+  let cur = null, pieces = 0, feeds = 0;
+  const doubles = [];
+  kept.forEach(it => {
+    const e = it.entry;
+    if (e.type !== 'breast') { out.push(it); return; }
+    pieces++;
+    if (cur) {
+      const gap = (e.t - cur.entry.end) / 60000;
+      if (gap <= MERGE_GAP_MIN && gap >= -DOUBLE_OVERLAP_MIN) {
+        const a = cur.entry;
+        a.left += e.left;
+        a.right += e.right;
+        a.last = e.last;
+        a.end = Math.max(a.end, e.end);
+        a.note = [a.note, e.note].filter(Boolean).join(' · ');
+        if (it.at && (!cur.at || it.at < cur.at)) cur.at = it.at;
+        cur.rows.push(it.row);
+        return;
+      }
+      if (gap < -DOUBLE_OVERLAP_MIN) {   // most likely the same feed logged by two people: keep both, say so
+        doubles.push('row ' + it.row + ' (' + it.by + ', ' + at(e.t) + ') overlaps row ' + cur.row + ' (' + cur.by + ', ' + at(cur.entry.t) + ')');
+        out.push(it);
+        feeds++;
+        return;
+      }
+    }
+    cur = it;
+    cur.rows = [it.row];
+    out.push(it);
+    feeds++;
+  });
+  if (pieces) report.push(pieces + ' breastfeed rows became ' + feeds + ' feeds (pieces within ' + MERGE_GAP_MIN + ' minutes joined).');
+  if (doubles.length) report.push('Possibly the same feed logged twice, kept as two feeds so you can decide (delete one in the app or the Feeds tab): ' + doubles.join('; ') + '.');
+  return out;
+}
+
+/* ================================================================== */
+/* Summary tabs (formulas only)                                        */
+/* ================================================================== */
+
+const HEAD_STYLE = r => r.setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
+
+function colLetter_(i) {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+  return s;
+}
+
+// Column references by header, for example R.feed('Ounces') -> 'Feeds'!H2:H
+function refs_() {
+  const R = {};
+  TAB_KEYS.forEach(k => {
+    const t = openTab_(k);
+    R[k] = h => { const L = colLetter_(t.c[h]); return "'" + TABS[k].name + "'!" + L + '2:' + L; };
+  });
+  return R;
+}
+
+// Every entry, newest first, one line each
+function buildTimeline_(sh) {
+  const R = refs_();
+  const F = R.feed, P = R.pump, S = R.sleep, G = R.growth, H = R.health, A = R.activity;
+  const block = (k, event, details) => {
+    const T = R[k]('Time');
+    const w = x => 'IF(' + T + '="",,' + x + ')';
+    return [T, w(event), w(details), R[k]('Logged by'), R[k]('Notes')].join(',');
+  };
+  const blocks = [
+    block('feed', F('Type'), 'IF(' + F('Type') + '="Bottle",' + F('Ounces') + '&" oz"&IF(' + F('Milk') + '="",""," "&LOWER(' + F('Milk') + ')),' +
+      '"L "&' + F('Left min') + '&" · R "&' + F('Right min') + '&" min")'),
+    block('pump', '"Pump"', P('Minutes') + '&" min, "&LOWER(' + P('Side') + ')&IF(' + P('Left oz') + '+' + P('Right oz') + '>0,", "&ROUND(' + P('Left oz') + '+' + P('Right oz') + ',2)&" oz","")'),
+    block('diaper', '"Diaper"', R.diaper('Kind')),
+    block('sleep', '"Sleep"', 'IF(' + S('Woke up') + '="","still asleep",TEXT(' + S('Woke up') + '-' + S('Time') + ',"[h]""h ""mm""m"""))'),
+    block('growth', G('Measure'), 'IF(' + G('Measure') + '="Length",' + G('Inches') + '&" in",' + G('Pounds') + '&" lb "&' + G('Ounces') + '&" oz")&IF(' + G('As entered') + '="",""," ("&' + G('As entered') + '&")")'),
+    block('health', H('Type'), 'TRIM(' + H('Detail') + '&" "&' + H('Dose') + '&IF(' + H('Temp °F') + '="",""," "&' + H('Temp °F') + '&" °F")&IF(' + H('As entered') + '="",""," ("&' + H('As entered') + '&")"))'),
+    block('activity', '"Activity"', A('Activity') + '&IF(' + A('Minutes') + '="",""," · "&' + A('Minutes') + '&" min")')
+  ];
+  HEAD_STYLE(sh.getRange('A1:E1').setValues([['Time', 'Event', 'Details', 'Logged by', 'Notes']]));
+  sh.getRange('A2').setFormula('=IFERROR(ARRAYFORMULA(LET(a,{' + blocks.join(';') + '},SORT(FILTER(a,INDEX(a,0,1)<>""),1,FALSE))),"No entries yet")');
+  sh.getRange('A2:A').setNumberFormat(DATE_FORMAT);
   sh.setFrozenRows(1);
-  const rows = sh.getMaxRows() - 1;
-  [L.TIME, L.END, L.AT, L.UPD].forEach(c => sh.getRange(2, c + 1, rows, 1).setNumberFormat('ddd m/d h:mm am/pm'));
-  sh.getRange(2, L.ID + 1, rows, 1).setNumberFormat('@');
-  sh.setColumnWidths(1, 2, 150);
-  return sh;
+  sh.setColumnWidth(1, 170); sh.setColumnWidth(2, 120); sh.setColumnWidth(3, 240);
 }
 
-// Log columns used below: A Time, B Event, C/D Left/Right min, E Bottle oz, H End, J Logged at,
-// V Pumped oz, W Sleep min, Y Weight, Z Detail, AA Dose, AF Length, AG Activity min
 function buildDashboard_(sh) {
-  const R = 18;   // the "Counting from" row
-  const cnt = c => [`=COUNTIFS(Log!$B$2:$B,${c},Log!$A$2:$A,">="&B$${R})`, `=COUNTIFS(Log!$B$2:$B,${c},Log!$A$2:$A,">="&C$${R})`];
-  const sum = col => [`=SUMIFS(Log!$${col}$2:$${col},Log!$A$2:$A,">="&B$${R})`, `=SUMIFS(Log!$${col}$2:$${col},Log!$A$2:$A,">="&C$${R})`];
-  const latest = (ev, col) => `=IFERROR(INDEX(SORT(FILTER({Log!A2:A,Log!${col}2:${col}},Log!B2:B="${ev}"),1,FALSE),1,2),"")`;
+  const R = refs_();
+  const F = R.feed, P = R.pump, Di = R.diaper, S = R.sleep, G = R.growth, H = R.health, A = R.activity;
+  const W = 18;   // the "Counting from" row
+  const since = (T, col) => T + ',">="&' + col + '$' + W;
+  const both = fn => ['B', 'C'].map(fn);
+  const cnt = (T, extra) => both(c => '=COUNTIFS(' + (extra ? extra + ',' : '') + since(T, c) + ')');
+  const sum = (T, v) => both(c => '=SUMIFS(' + v + ',' + since(T, c) + ')');
+  const latest = (T, val, cond) => '=IFERROR(INDEX(SORT(FILTER({' + T + ',' + val + '},' + cond + '),1,FALSE),1,2),"")';
+  const loggedAt = TAB_KEYS.map(k => R[k]('Logged at')).join(',');
+  const asleep = both(c => '=SUMPRODUCT(IFERROR((' + S('Time') + '>=' + c + '$' + W + ')*(' + S('Woke up') + '<>"")*(' + S('Woke up') + '-' + S('Time') + '),0))*24');
   const rows = [
     ['Baby Log', '', ''],
     ['', '', ''],
     ['Right now', '', ''],
-    ['Last entry logged', '=IF(COUNT(Log!J2:J)=0,"",MAX(Log!J2:J))', ''],
-    ['Last feed started', '=IFERROR(MAX(FILTER(Log!A2:A,(Log!B2:B="Breastfeed")+(Log!B2:B="Bottle"))),"")', ''],
+    ['Last entry logged', '=IF(MAX(' + loggedAt + ')=0,"",MAX(' + loggedAt + '))', ''],
+    ['Last feed started', '=IF(MAX(' + F('Time') + ')=0,"",MAX(' + F('Time') + '))', ''],
     ['Time since last feed started (h:mm)', '=IF(B5="","",NOW()-B5)', ''],
-    ['Last breastfeed started on', '=IFERROR(INDEX(SORT(FILTER(Log!A2:G,Log!B2:B="Breastfeed"),1,FALSE),1,6),"")', ''],
-    ['Last breastfeed ended on', '=IFERROR(INDEX(SORT(FILTER(Log!A2:G,Log!B2:B="Breastfeed"),1,FALSE),1,7),"")', ''],
-    ['Last wet diaper', '=IFERROR(MAX(FILTER(Log!A2:A,REGEXMATCH(Log!B2:B,"(?i)^wet"))),"")', ''],
-    ['Last dirty diaper', '=IFERROR(MAX(FILTER(Log!A2:A,REGEXMATCH(Log!B2:B,"(?i)dirty"))),"")', ''],
-    ['Last pump', '=IFERROR(MAX(FILTER(Log!A2:A,Log!B2:B="Pump")),"")', ''],
-    ['Last woke up', '=IFERROR(MAX(FILTER(Log!H2:H,Log!B2:B="Sleep")),"")', ''],
-    ['Latest weight', latest('Weight', 'Y'), ''],
-    ['Latest length', latest('Length', 'AF'), ''],
-    ['Last medicine', '=IFERROR(INDEX(SORT(FILTER({Log!A2:A,Log!Z2:Z&" "&Log!AA2:AA&" at "&TEXT(Log!A2:A,"ddd h:mm am/pm")},Log!B2:B="Medicine"),1,FALSE),1,2),"")', ''],
+    ['Last breastfeed started on', latest(F('Time'), F('First side'), F('Type') + '="Breastfeed"'), ''],
+    ['Last breastfeed ended on', latest(F('Time'), F('Last side'), F('Type') + '="Breastfeed"'), ''],
+    ['Last wet diaper', '=IFERROR(MAX(FILTER(' + Di('Time') + ',REGEXMATCH(' + Di('Kind') + ',"(?i)wet"))),"")', ''],
+    ['Last dirty diaper', '=IFERROR(MAX(FILTER(' + Di('Time') + ',REGEXMATCH(' + Di('Kind') + ',"(?i)dirty"))),"")', ''],
+    ['Last pump', '=IF(MAX(' + P('Time') + ')=0,"",MAX(' + P('Time') + '))', ''],
+    ['Last woke up', '=IF(MAX(' + S('Woke up') + ')=0,"",MAX(' + S('Woke up') + '))', ''],
+    ['Latest weight', latest(G('Time'), G('Pounds') + '&" lb "&' + G('Ounces') + '&" oz"', G('Measure') + '="Weight"'), ''],
+    ['Latest length', latest(G('Time'), G('Inches') + '&" in"', G('Measure') + '="Length"'), ''],
+    ['Last medicine', latest(H('Time'), 'TRIM(' + H('Detail') + '&" "&' + H('Dose') + ')&" at "&TEXT(' + H('Time') + ',"ddd h:mm am/pm")', H('Type') + '="Medicine"'), ''],
     ['', '', ''],
     ['Totals', 'Last 24 hours', 'Since midnight'],
     ['Counting from', '=NOW()-1', '=TODAY()'],
-    ['Wet diapers'].concat(cnt('"Wet*"')),
-    ['Dirty diapers'].concat(cnt('"*dirty*"')),
-    ['Breastfeeds'].concat(cnt('"Breastfeed"')),
-    ['Left breast minutes'].concat(sum('C')),
-    ['Right breast minutes'].concat(sum('D')),
-    ['Bottles'].concat(cnt('"Bottle"')),
-    ['Bottle ounces'].concat(sum('E')),
+    ['Wet diapers'].concat(cnt(Di('Time'), Di('Kind') + ',"Wet*"')),
+    ['Dirty diapers'].concat(cnt(Di('Time'), Di('Kind') + ',"*dirty*"')),
+    ['Breastfeeds'].concat(cnt(F('Time'), F('Type') + ',"Breastfeed"')),
+    ['Left breast minutes'].concat(sum(F('Time'), F('Left min'))),
+    ['Right breast minutes'].concat(sum(F('Time'), F('Right min'))),
+    ['Bottles'].concat(cnt(F('Time'), F('Type') + ',"Bottle"')),
+    ['Bottle ounces'].concat(sum(F('Time'), F('Ounces'))),
     ['All feeds', '=B21+B24', '=C21+C24'],
-    ['Pumps'].concat(cnt('"Pump"')),
-    ['Pumped ounces'].concat(sum('V')),
+    ['Pumps'].concat(cnt(P('Time'))),
+    ['Pumped ounces'].concat(both(c => '=SUMIFS(' + P('Left oz') + ',' + since(P('Time'), c) + ')+SUMIFS(' + P('Right oz') + ',' + since(P('Time'), c) + ')')),
     ['Milk removal (breastfeeds + pumps)', '=B21+B27', '=C21+C27'],
-    ['Hours asleep (sleeps that started in the window)'].concat(sum('W').map(f => '=' + f.slice(1) + '/60')),
-    ['Activities'].concat(cnt('"Activity"')),
+    ['Hours asleep (sleeps that started in the window)'].concat(asleep),
+    ['Activities'].concat(cnt(A('Time'))),
     ['', '', ''],
     ['Recent entries', '', '']
   ];
   sh.getRange(1, 1, rows.length, 3).setValues(rows);
-  sh.getRange('A34:G34').setValues([['Time', 'Event', 'Left min', 'Right min', 'Bottle oz', 'First side', 'Last side']])
-    .setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
-  sh.getRange('A35').setValue('=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER(Log!A2:G,Log!A2:A<>""),1,FALSE),15,7),"No entries yet")');
+  HEAD_STYLE(sh.getRange('A34:E34').setValues([['Time', 'Event', 'Details', 'Logged by', 'Notes']]));
+  sh.getRange('A35').setValue("=ARRAY_CONSTRAIN('" + TIMELINE + "'!A2:E,15,5)");
   sh.getRange('A1').setFontSize(16).setFontWeight('bold');
   ['A3', 'A17:C17', 'A33'].forEach(a => sh.getRange(a).setFontWeight('bold').setFontSize(12));
   ['B4:B5', 'B9:B12', 'B18:C18', 'A35:A49'].forEach(a => sh.getRange(a).setNumberFormat('ddd m/d h:mm am/pm'));
   sh.getRange('B6').setNumberFormat('[h]:mm');
+  sh.getRange('B25:C25').setNumberFormat('0.##');
+  sh.getRange('B28:C28').setNumberFormat('0.##');
   sh.getRange('B30:C30').setNumberFormat('0.0');
   sh.getRange('B4:C31').setHorizontalAlignment('right');
   sh.setColumnWidth(1, 300); sh.setColumnWidth(2, 190); sh.setColumnWidth(3, 140);
 }
 
+// One row per day, newest first, from the first entry to today (days with nothing show zeros)
 function buildDaily_(sh) {
-  const col = (cond, val) => `ARRAYFORMULA(IF(${cond},${val},0))`;
-  const n = c => `ARRAYFORMULA(IF(Log!${c}2:${c}="",0,Log!${c}2:${c}))`;
-  const parts = [
-    'ARRAYFORMULA(IF(Log!A2:A="",,TO_DATE(INT(Log!A2:A))))',
-    col('REGEXMATCH(Log!B2:B,"(?i)^wet")', 1),
-    col('REGEXMATCH(Log!B2:B,"(?i)dirty")', 1),
-    col('Log!B2:B="Breastfeed"', 1),
-    n('C'), n('D'),
-    col('Log!B2:B="Bottle"', 1),
-    n('E'),
-    col('Log!B2:B="Pump"', 1),
-    n('V'),
-    col('(Log!B2:B="Pump")+(Log!B2:B="Breastfeed")', 1),
-    'ARRAYFORMULA(IF(Log!W2:W="",0,Log!W2:W/60))'
+  const R = refs_();
+  const F = R.feed, P = R.pump, Di = R.diaper, S = R.sleep;
+  // MAP works out each day separately (SUMIFS does not expand inside ARRAYFORMULA)
+  const day = T => T + ',">="&d,' + T + ',"<"&d+1';
+  const each = x => '=MAP(A2:A,LAMBDA(d,IF(d="",,' + x + ')))';
+  const cnt = (T, extra) => each('COUNTIFS(' + (extra ? extra + ',' : '') + day(T) + ')');
+  const sum = (T, v) => each('SUMIFS(' + v + ',' + day(T) + ')');
+  const firstDay = 'MIN(' + TAB_KEYS.filter(k => k !== 'growth').map(k => R[k]('Time')).join(',') + ')';
+  const labels = ['Date', 'Wet', 'Dirty', 'Breastfeeds', 'Left min', 'Right min', 'Bottles', 'Bottle oz', 'Pumps', 'Pumped oz', 'Milk removal', 'Hours asleep'];
+  const formulas = [
+    '=IF(' + firstDay + '=0,,SEQUENCE(TODAY()-INT(' + firstDay + ')+1,1,TODAY(),-1))',
+    cnt(Di('Time'), Di('Kind') + ',"Wet*"'),
+    cnt(Di('Time'), Di('Kind') + ',"*dirty*"'),
+    cnt(F('Time'), F('Type') + ',"Breastfeed"'),
+    sum(F('Time'), F('Left min')),
+    sum(F('Time'), F('Right min')),
+    cnt(F('Time'), F('Type') + ',"Bottle"'),
+    sum(F('Time'), F('Ounces')),
+    cnt(P('Time')),
+    each('SUMIFS(' + P('Left oz') + ',' + day(P('Time')) + ')+SUMIFS(' + P('Right oz') + ',' + day(P('Time')) + ')'),
+    '=ARRAYFORMULA(IF(A2:A="",,D2:D+I2:I))',
+    each('SUMPRODUCT(IFERROR((' + S('Time') + '>=d)*(' + S('Time') + '<d+1)*(' + S('Woke up') + '<>"")*(' + S('Woke up') + '-' + S('Time') + '),0))*24')
   ];
-  const labels = ['Wet', 'Dirty', 'Breastfeeds', 'Left min', 'Right min', 'Bottles', 'Bottle oz', 'Pumps', 'Pumped oz', 'Milk removal', 'Hours asleep'];
-  const sums = labels.map((l, i) => 'sum(Col' + (i + 2) + ')').join(', ');
-  const lab = labels.map((l, i) => 'sum(Col' + (i + 2) + ") '" + l + "'").join(', ');
-  sh.getRange('A1').setValue('=QUERY({' + parts.join(',') + '},"select Col1, ' + sums +
-    " where Col1 is not null group by Col1 order by Col1 desc label Col1 'Date', " + lab + " format Col1 'ddd mmm d', sum(Col12) '0.0'\",0)");
-  sh.getRange('A1:L1').setFontWeight('bold').setBackground('#263238').setFontColor('#FFFFFF');
+  HEAD_STYLE(sh.getRange(1, 1, 1, labels.length).setValues([labels]));
+  sh.getRange(2, 1, 1, formulas.length).setValues([formulas]);
+  sh.getRange('A2:A').setNumberFormat('ddd mmm d');
+  sh.getRange('H2:H').setNumberFormat('0.##');
+  sh.getRange('J2:J').setNumberFormat('0.##');
+  sh.getRange('L2:L').setNumberFormat('0.0');
   sh.setFrozenRows(1);
   sh.setColumnWidth(1, 120);
 }

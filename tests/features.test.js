@@ -315,7 +315,8 @@ const near = (a, b, ms) => Math.abs(a - b) <= ms;
   // ---------- Improvement 2: summary tabs rebuild ----------
   const rb = await fetch(BASE + '/__run?fn=rebuildSummaries');
   const st = await state();
-  check(rb.status === 200 && st.Dashboard && st.Dashboard.some(r => r[0] === 'Milk removal (breastfeeds + pumps)') && st.Daily[0][0].includes("'Milk removal'"), 'rebuilding the summary tabs adds pumps, milk removal and sleep');
+  check(rb.status === 200 && st.Dashboard && st.Dashboard.some(r => r[0] === 'Milk removal (breastfeeds + pumps)') && st.Daily[0].includes('Milk removal') &&
+    st.Timeline && /LET\(a,\{'Feeds'!A2:A/.test(st.Timeline[1][0]), 'rebuilding the summary tabs makes Dashboard, Daily and Timeline from the entry tabs');
 
   // ---------- A timer running on a phone from before timers were shared carries over ----------
   await A.evaluate(() => localStorage.setItem('bl.active', JSON.stringify({ start: Date.now() - 6 * 60000, first: 'L', side: 'L', running: true, segStart: Date.now() - 6 * 60000, left: 0, right: 0 })));

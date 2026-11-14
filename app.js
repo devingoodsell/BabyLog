@@ -231,7 +231,8 @@
     // (An older script that does not share the timer sends no "live"; the timer then stays on this phone.)
     if ('live' in j && !outbox.some(o => o.op === 'live')) {
       const sv = j.live || null;
-      if (sv && entries.some(e => e.id === sv.id)) { active = null; } else active = sv;
+      // A timer whose feed is already saved is over (unless it is adding to that saved feed)
+      if (sv && !sv.continues && entries.some(e => e.id === sv.id)) { active = null; } else active = sv;
       saveActive();
     }
     syncedAt = j.syncedAt || Date.now(); store(K.SYNC, syncedAt);
@@ -277,7 +278,7 @@
       outbox.push({ op: 'edit', entry: e });
     }
     touch(); saveAll();
-    if (!(opts && opts.quiet)) toast('Changes saved', () => { delete before.pending; editEntry(before, { quiet: true }); });
+    if (!(opts && opts.quiet)) toast((opts && opts.msg) || 'Changes saved', () => { delete before.pending; editEntry(before, { quiet: true }); });
     flush();
   }
 
@@ -630,9 +631,10 @@
   /* Toast                                                             */
   /* ================================================================ */
   let toastTimer, undoFn;
-  function toast(msg, undo) {
+  function toast(msg, undo, label) {
     $('toastMsg').textContent = msg; undoFn = undo || null;
     $('toastUndo').hidden = !undo;
+    $('toastUndo').textContent = label || 'Undo';
     $('toast').classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500);
   }
@@ -822,11 +824,39 @@
   }
   const isLong = a => !!(a && a.running && Date.now() - a.segStart >= LONG_MIN * MIN);
   const longKey = a => a.id + ':' + a.segStart;
+  // A breastfeed that stopped under 30 minutes ago is the same feed (a burp, a diaper change, a
+  // pause before the other side). Starting the timer then adds to it instead of logging a new one.
+  const CONTINUE_MIN = 30;
+  const feedEnd = e => Math.max(e.end || 0, e.t + ((e.left || 0) + (e.right || 0)) * MIN);
+  function feedToContinue(at) {
+    const last = entries.filter(e => e.type === 'breast' && e.t <= at).sort((x, y) => y.t - x.t)[0];
+    return last && at - feedEnd(last) <= CONTINUE_MIN * MIN ? last : null;
+  }
+  // Adds minutes to a saved breastfeed. "Keep separate" turns the added part into its own feed.
+  function mergeFeed(prev, add) {
+    const before = Object.assign({}, prev); delete before.pending;
+    const both = (prev.left || 0) + add.left > 0 && (prev.right || 0) + add.right > 0;
+    editEntry(Object.assign({}, prev, {
+      left: (prev.left || 0) + add.left, right: (prev.right || 0) + add.right,
+      first: both ? prev.first : (prev.left || add.left ? 'L' : 'R'), last: add.last,
+      end: Math.max(feedEnd(prev), add.end), note: [prev.note, add.note].filter(Boolean).join(' · ')
+    }), { quiet: true });
+    toast('Added to the ' + fmtTime(prev.t) + ' feed', () => {
+      editEntry(before, { quiet: true });
+      addEntry(Object.assign({ type: 'breast' }, add), { quiet: true });
+      toast('Saved as a separate feed');
+    }, 'Keep separate');
+  }
   function tapSide(s) {
     const now = Date.now();
     const a = active;
     if (!a) {
+      const prev = feedToContinue(now);
       active = { id: newId(), by: auth ? auth.name : '', start: now, first: s, side: s, running: true, segStart: now, left: 0, right: 0, note: $('note-timer').value };
+      if (prev) {   // the clocks carry on from the earlier feed's minutes
+        Object.assign(active, { id: prev.id, continues: true, start: prev.t, first: prev.first, left: prev.left * MIN, right: prev.right * MIN,
+          baseLeft: prev.left * MIN, baseRight: prev.right * MIN, contStart: now, contFirst: s });
+      }
     } else if (a.side === s && a.running) {
       if (s === 'L') a.left += now - a.segStart; else a.right += now - a.segStart;
       a.running = false;
@@ -837,6 +867,13 @@
     saveActive(); renderTimer(); renderLive();
     queueLive();
   }
+  $('feedNew').addEventListener('click', () => {
+    const a = active; if (!a || !a.continues) return;
+    Object.assign(a, { id: newId(), start: a.contStart, first: a.contFirst, left: Math.max(0, a.left - a.baseLeft), right: Math.max(0, a.right - a.baseRight) });
+    ['continues', 'baseLeft', 'baseRight', 'contStart', 'contFirst'].forEach(k => delete a[k]);
+    saveActive(); renderTimer(); renderLive();
+    queueLive(true);
+  });
   $('sideL').addEventListener('click', () => tapSide('L'));
   $('sideR').addEventListener('click', () => tapSide('R'));
 
@@ -855,13 +892,18 @@
       $('hint' + s).textContent = running ? 'Tap to pause' : paused ? 'Paused' : a ? 'Tap to switch' : 'Tap to start';
       $('tag' + s).hidden = !!a || next !== s;
     });
+    const prev = a ? null : feedToContinue(Date.now());
     if (a) {
       const total = sideMs(a, 'L') + sideMs(a, 'R');
       $('feedTotal').innerHTML = 'Total <b></b> · started ' + fmtTime(a.start);
       $('feedTotal').querySelector('b').textContent = clock(total);
+    } else if (prev) {
+      $('feedTotal').textContent = 'The ' + fmtTime(prev.t) + ' feed ended ' + durText((Date.now() - feedEnd(prev)) / MIN) + ' ago on the ' + sideName(prev.last).toLowerCase() + '. Tapping a side adds to it.';
     } else {
       $('feedTotal').textContent = next ? 'Last feed ended on the ' + sideName(other(next)).toLowerCase() + '. Tap a side to start.' : "Tap the side you're starting on";
     }
+    $('contNote').hidden = !(a && a.continues);
+    if (a && a.continues) $('contText').textContent = 'Adding to the ' + fmtTime(a.start) + ' feed.';
     const who = a && a.by && auth && a.by !== auth.name;
     $('liveWho').hidden = !who;
     if (who) $('liveWho').textContent = 'Started by ' + a.by + ' on their phone. You can switch sides, pause or save it here.';
@@ -901,16 +943,31 @@
     const a = active; if (!a) return;
     // A side used for 20 seconds or more counts as at least 1 minute
     const toMin = ms => (ms >= 20000 ? Math.max(1, Math.round(ms / MIN)) : 0);
+    if (a.continues) {
+      active = null; saveActive();
+      const addL = toMin(sideMs(a, 'L') - a.baseLeft), addR = toMin(sideMs(a, 'R') - a.baseRight);
+      const prev = entries.find(e => e.id === a.id);
+      const add = { t: a.contStart, left: addL, right: addR, first: addL && addR ? a.contFirst : (addL ? 'L' : 'R'), last: addL && addR ? a.side : (addL ? 'L' : 'R'), end: Date.now(), note: noteOf('timer') };
+      if (!addL && !addR) toast('Nothing was added: under 20 seconds');
+      else if (prev) mergeFeed(prev, add);
+      else addEntry(Object.assign({ id: a.id, type: 'breast' }, add, { t: a.start, left: Math.round(sideMs(a, 'L') / MIN), right: Math.round(sideMs(a, 'R') / MIN), first: a.first }));   // the earlier feed was deleted meanwhile
+      queueLive(); resetNote('timer'); closeSheet();
+      return;
+    }
     const left = toMin(sideMs(a, 'L')), right = toMin(sideMs(a, 'R'));
     active = null; saveActive();
     if (!left && !right) { toast('That feed was under 20 seconds, so it was not saved'); queueLive(); renderTimer(); renderLive(); closeSheet(); return; }
     const first = left && right ? a.first : (left ? 'L' : 'R');
     const last = left && right ? a.side : first;
-    addEntry({ id: a.id, type: 'breast', t: a.start, left: left, right: right, first: first, last: last, note: noteOf('timer') });
+    addEntry({ id: a.id, type: 'breast', t: a.start, left: left, right: right, first: first, last: last, end: Date.now(), note: noteOf('timer') });
     queueLive();
     closeSheet();
   });
-  $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); queueLive(); resetNote('timer'); renderTimer(); renderLive(); toast('Feed discarded'); });
+  $('feedDiscard').addEventListener('click', () => {
+    const a = active;
+    active = null; saveActive(); queueLive(); resetNote('timer'); renderTimer(); renderLive();
+    toast(a && a.continues ? 'Stopped. The ' + fmtTime(a.start) + ' feed is unchanged.' : 'Feed discarded');
+  });
   $('longKeep').addEventListener('click', () => { if (active) store(K.LONG, longKey(active)); renderTimer(); });
   $('longSave').addEventListener('click', () => $('feedDone').click());
   $('longDiscard').addEventListener('click', () => $('feedDiscard').click());
@@ -971,7 +1028,15 @@
     const first = both ? manual.first : only;
     const last = both ? other(manual.first) : only;
     const e = { type: 'breast', t: whenOf('manual'), left: manual.L, right: manual.R, first: first, last: last, note: noteOf('manual') };
-    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
+    e.end = e.t + (e.left + e.right) * MIN;
+    if (editing) {
+      // keep any pause the feed had (its end), moved along with its start
+      if (editing.end) e.end = Math.max(e.end, editing.end + (e.t - editing.t));
+      editEntry(Object.assign({ id: editing.id }, e));
+    } else {
+      const prev = feedToContinue(e.t);
+      if (prev) mergeFeed(prev, e); else addEntry(e);
+    }
     closeSheet();
   });
 
@@ -1383,7 +1448,7 @@
       if (t > Date.now()) { toast('That date is in the future'); return; }
       if (t < Date.now() - 365 * 86400000) { toast('Pick a date within the last year'); return; }
     }
-    const e = gKind === 'W' ? { type: 'weight', t: t, weightOz: wOz, note: noteOf('weight') }
+    const e = gKind === 'W' ? { type: 'weight', t: t, weightOz: wOz, weightUnit: wUnit(), note: noteOf('weight') }
       : { type: 'length', t: t, lengthIn: lenIn, lengthUnit: lenUnit(), note: noteOf('weight') };
     if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();

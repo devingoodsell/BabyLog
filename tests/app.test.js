@@ -120,6 +120,9 @@ const check = (cond, msg) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if
   await A.click('[data-open="feed"]');
   await A.click('#modeTimer');
   await A.click('#sideL');
+  // the manual feed ended minutes ago, so the timer adds to it unless told this is a new feed
+  check(!(await A.isHidden('#contNote')), 'the timer offers to continue the feed that just ended');
+  await A.click('#feedNew');
   await A.waitForTimeout(21000);
   await A.click('#sideR');
   await A.waitForTimeout(800);
@@ -274,6 +277,9 @@ const check = (cond, msg) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if
   await A.click('#modeManual');
   await A.click('#manualPane .chip[data-m="0"]');
   await A.click('#manualSave');
+  await A.waitForTimeout(300);
+  check((await A.textContent('#toastMsg')).startsWith('Added to the'), 'a feed right after another is added to it');
+  await A.click('#toastUndo');   // Keep separate
   await A.waitForTimeout(1200);
   check((await A.textContent('#lastEmptySub')).startsWith('Breastfeed:'), 'top card switches to the newer breastfeed');
   // the pump screen remembers the last side and duration
