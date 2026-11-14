@@ -317,8 +317,7 @@ function edit_(dev, e) {
   const rec = entryRec_(entry);
   const by = f.values[f.c['Logged by']], at = f.values[f.c['Logged at']];
   if (f.key === key) {
-    const row = rowFrom_(f, rec, f.values);
-    f.sh.getRange(f.row, 1, 1, row.length).setValues([row]);
+    writeRow_(f, f.row, rowFrom_(f, rec, f.values));
     const was = f.values[f.c.Time];
     if (!(was instanceof Date) || was.getTime() !== entry.t) sortTab_(f);
   } else {   // it became a different kind of entry: it moves to that kind's tab
@@ -731,11 +730,19 @@ function rowFrom_(t, rec, base) {
 // Adds a row. Rows stay in time order: one logged late or backdated is moved into place.
 function appendRec_(t, rec) {
   const last = t.sh.getLastRow();
-  t.sh.appendRow(rowFrom_(t, rec, null));
+  if (t.sh.getMaxRows() <= last) t.sh.insertRowsAfter(t.sh.getMaxRows(), 100);
+  writeRow_(t, last + 1, rowFrom_(t, rec, null));
   if (last >= 2) {
     const prev = t.sh.getRange(last, t.c.Time + 1).getValue();
     if (prev instanceof Date && prev.getTime() > rec.Time.getTime()) sortTab_(t);
   }
+}
+
+// Writes one row with the tab's date and ID formats (appendRow would drop them)
+function writeRow_(t, at, row) {
+  const range = t.sh.getRange(at, 1, 1, row.length);
+  range.setValues([row]);
+  range.setNumberFormats([t.head.map((h, i) => (i >= row.length ? 'General' : DATE_COLS.indexOf(h) !== -1 ? DATE_FORMAT : h === 'ID' ? '@' : 'General'))]);
 }
 
 function sortTab_(t) {

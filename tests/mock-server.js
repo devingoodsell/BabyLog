@@ -45,7 +45,7 @@ class Range {
   }
   setValue(v) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, v); return this; }
   setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
-  setDataValidation() { return this; } setNumberFormat() { return this; }
+  setDataValidation() { return this; } setNumberFormat() { return this; } setNumberFormats() { return this; }
   setFontSize() { return this; } setHorizontalAlignment() { return this; }
 }
 class Sheet {
