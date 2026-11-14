@@ -153,6 +153,7 @@
             const k = outbox.indexOf(op);
             if (k !== -1) outbox.splice(k, 1);
             saveOutbox();
+            if (op.op === 'live') continue;   // an older script without the shared timer: keep it on this phone
             if (op.op === 'add') { entries = entries.filter(x => x.id !== op.entry.id); saveEntries(); }
             else refreshSoon = true;
             toast("Couldn't save: " + err.message);
@@ -227,7 +228,8 @@
       lastFull = Date.now();
     }
     // The shared breastfeed timer: the sheet's copy wins unless this phone has a change waiting
-    if (!outbox.some(o => o.op === 'live')) {
+    // (An older script that does not share the timer sends no "live"; the timer then stays on this phone.)
+    if ('live' in j && !outbox.some(o => o.op === 'live')) {
       const sv = j.live || null;
       if (sv && entries.some(e => e.id === sv.id)) { active = null; } else active = sv;
       saveActive();

@@ -107,7 +107,9 @@ Object.assign(global, {
   Logger: { log: m => { logs.push(String(m)); console.log('[Logger]', m); } }
 });
 const code = fs.readFileSync(path.join(APP_DIR, 'apps-script/Code.gs'), 'utf8');
-const api = new Function(code + '\nreturn { doPost, setup, createOwnerInvite, checkAlerts, setupReminders, rebuildSummaries };')();
+// (typeof checks let this also run older versions of Code.gs)
+const api = new Function(code + '\nconst f = n => { try { return eval(n); } catch (e) { return null; } };' +
+  '\nreturn { doPost, setup, createOwnerInvite, checkAlerts: f("checkAlerts"), setupReminders: f("setupReminders"), rebuildSummaries: f("rebuildSummaries") };')();
 api.setup();
 api.createOwnerInvite();
 
