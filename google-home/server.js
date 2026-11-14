@@ -12,6 +12,8 @@
  *   POST /oauth/authorize  checks the passcode, redirects back to Google with a code
  *   POST /oauth/token      exchanges codes and refresh tokens for access tokens
  *   POST /fulfillment      SYNC / QUERY / EXECUTE / DISCONNECT from Google
+ *   POST /push             reminders: the Baby Log Apps Script hands over notifications,
+ *                          this service encrypts and delivers them (Web Push)
  *
  * No database: codes and tokens are signed with SIGNING_KEY. Changing SIGNING_KEY
  * (or LINK_PASSCODE for new links) unlinks everything.
@@ -20,6 +22,7 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const webpush = require('web-push');
 
 const ENV = process.env;
 const CONFIG = {
@@ -29,8 +32,13 @@ const CONFIG = {
   signingKey: ENV.SIGNING_KEY || '',
   passcode: ENV.LINK_PASSCODE || '',
   api: ENV.BABYLOG_API || '',          // Apps Script web app URL (ends in /exec)
-  token: ENV.BABYLOG_TOKEN || ''       // device key for the "Google Home" device in Baby Log
+  token: ENV.BABYLOG_TOKEN || '',      // device key for the "Google Home" device in Baby Log
+  pushSecret: ENV.PUSH_SECRET || '',   // the Apps Script sends this with each batch of reminders
+  vapidPublic: ENV.VAPID_PUBLIC || '',
+  vapidPrivate: ENV.VAPID_PRIVATE || ''
 };
+const PUSH_ON = !!(CONFIG.pushSecret && CONFIG.vapidPublic && CONFIG.vapidPrivate);
+if (PUSH_ON) webpush.setVapidDetails('https://github.com/devingoodsell/BabyLog', CONFIG.vapidPublic, CONFIG.vapidPrivate);
 for (const [k, v] of Object.entries({ CLIENT_ID: CONFIG.clientId, CLIENT_SECRET: CONFIG.clientSecret, SIGNING_KEY: CONFIG.signingKey, LINK_PASSCODE: CONFIG.passcode, BABYLOG_API: CONFIG.api, BABYLOG_TOKEN: CONFIG.token })) {
   if (!v) { console.error('Missing environment variable ' + k); process.exit(1); }
 }
@@ -287,6 +295,34 @@ async function fulfillment(req, res) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Reminders: deliver notifications the Apps Script decided to send    */
+/* ------------------------------------------------------------------ */
+async function push(req, res) {
+  if (!PUSH_ON) return send(res, 404, { error: 'push_not_configured' });
+  const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization || '');
+  if (!bearer || !safeEqual(bearer[1], CONFIG.pushSecret)) return send(res, 401, { error: 'unauthorized' });
+  let body;
+  try { body = JSON.parse(await readBody(req, 512 * 1024)); } catch (e) { return send(res, 400, { error: 'bad_json' }); }
+  const messages = Array.isArray(body.messages) ? body.messages.slice(0, 100) : [];
+  const results = [];
+  for (const m of messages) {
+    const sub = m && m.subscription;
+    if (!sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys) { results.push({ ok: false, error: 'bad subscription' }); continue; }
+    const payload = JSON.stringify({ title: String(m.title || 'Baby Log').slice(0, 80), body: String(m.body || '').slice(0, 300), tag: String(m.tag || '').slice(0, 60) });
+    try {
+      await webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high', timeout: 8000 });
+      results.push({ ok: true });
+    } catch (e) {
+      const code = e && e.statusCode;
+      // 404 / 410: the phone unsubscribed or the app was removed
+      results.push({ ok: false, gone: code === 404 || code === 410, error: code ? 'HTTP ' + code : String(e && e.message || e) });
+    }
+  }
+  console.log(JSON.stringify({ msg: 'push', sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length }));
+  return send(res, 200, { results });
+}
+
+/* ------------------------------------------------------------------ */
 /* Server                                                              */
 /* ------------------------------------------------------------------ */
 const server = http.createServer(async (req, res) => {
@@ -296,6 +332,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/oauth/authorize' && (req.method === 'GET' || req.method === 'POST')) return await authorize(req, res, url);
     if (url.pathname === '/oauth/token' && req.method === 'POST') return await token(req, res);
     if (url.pathname === '/fulfillment' && req.method === 'POST') return await fulfillment(req, res);
+    if (url.pathname === '/push' && req.method === 'POST') return await push(req, res);
     send(res, 404, { error: 'not_found' });
   } catch (e) {
     console.error(JSON.stringify({ msg: 'error', path: url.pathname, error: String(e && e.message || e) }));

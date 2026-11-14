@@ -39,6 +39,10 @@
   --sleep-soft: #E6EAF2;
   --weight: #B0456A;
   --weight-soft: #FBE6EE;
+  --health: #2F8A4E;
+  --health-soft: #E3F3E8;
+  --activity: #B85A17;
+  --activity-soft: #FCEBDD;
   --c-sleep: #6250D6;
   --c-pump: #B34FA0;
   --c-weight: #C2577A;
@@ -61,7 +65,7 @@
   :root {
     --bg: #0D1220; --surface: #161C2B; --ink: #E4E8F1; --muted: #8C95A8; --line: #252D3F;
     --feed: #8DA5F0; --feed-soft: #1E2843; --bottle: #5DBFB2; --bottle-soft: #15302E;
-    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --c-sleep: #9085E9; --c-pump: #D25FC0; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
+    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --health: #6FCF8E; --health-soft: #183022; --activity: #F0A065; --activity-soft: #3A2516; --c-sleep: #9085E9; --c-pump: #D25FC0; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
     --on-accent: #0D1220; --scrim: rgba(0, 0, 0, .6); --shadow: none; color-scheme: dark;
   }
 }
@@ -134,6 +138,28 @@ details.st-more summary::-webkit-details-marker { display: none; }
 .live .grow { flex: 1; min-width: 0; }
 .live small { display: block; font-weight: 600; opacity: .85; font-size: 13px; }
 .live.sleep { background: var(--sleep); }
+.live.warn { background: var(--warn); }
+.stat.due { box-shadow: inset 0 0 0 2px var(--warn), var(--shadow); }
+.due-tag { display: inline-flex; align-self: flex-start; margin-top: 6px; font-size: 12px; font-weight: 800; color: var(--on-accent); background: var(--warn); border-radius: 999px; padding: 3px 9px; }
+.long-note { background: var(--diaper-soft); border-radius: var(--r-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; font-weight: 700; }
+.long-note .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.when-exact { font: inherit; font-weight: 700; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 7px 14px; }
+.editing-tag { font-size: 12px; font-weight: 800; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 4px 10px; }
+.primary.health { background: var(--health); color: var(--on-accent); }
+.primary.activity { background: var(--activity); color: var(--on-accent); }
+.kinds.health-kinds { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.kinds.health-kinds .kind { padding: 12px 2px; font-size: 12px; gap: 6px; }
+.kinds.health-kinds .kind svg { color: var(--health); width: 24px; height: 24px; }
+.kinds.health-kinds .kind[aria-pressed="true"] { border-color: var(--health); background: var(--health-soft); color: var(--health); }
+#sheet-health .stepper button { color: var(--health); }
+#sheet-activity .oz-row button { background: var(--activity-soft); color: var(--activity); }
+#sheet-activity .oz-big { color: var(--activity); }
+.chips.pick .chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.q-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.q-item + .q-item { border-top: 1px solid var(--line); }
+.q-item b { font-size: 15px; }
+.q-item .muted { font-size: 13px; }
+.q-item .err { color: var(--danger); font-size: 13px; font-weight: 700; }
 .live svg { width: 18px; height: 18px; flex: none; }
 .stat.tap { border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; }
 @keyframes pulse { 50% { opacity: .35; } }
@@ -147,16 +173,19 @@ details.st-more summary::-webkit-details-marker { display: none; }
 .next { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; font-weight: 800; color: var(--feed); background: var(--feed-soft); border-radius: 999px; padding: 4px 10px; align-self: flex-start; }
 
 /* Actions */
-.actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.action { border: 0; border-radius: var(--r-lg); padding: 14px 4px 12px; min-height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-weight: 800; font-size: 14px; transition: transform .12s ease; }
+.actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.action { border: 0; border-radius: 18px; padding: 12px 2px 10px; min-height: 82px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; font-weight: 800; font-size: 13px; transition: transform .12s ease; min-width: 0; }
 .action:active { transform: scale(.97); }
-.action svg { width: 32px; height: 32px; }
+.action svg { width: 28px; height: 28px; }
+@media (max-width: 370px) { .action { font-size: 12px; } .action svg { width: 26px; height: 26px; } }
 .a-feed { background: var(--feed-soft); color: var(--feed); }
 .a-bottle { background: var(--bottle-soft); color: var(--bottle); }
 .a-diaper { background: var(--diaper-soft); color: var(--diaper); }
 .a-pump { background: var(--pump-soft); color: var(--pump); }
 .a-sleep { background: var(--sleep-soft); color: var(--sleep); }
 .a-weight { background: var(--weight-soft); color: var(--weight); }
+.a-health { background: var(--health-soft); color: var(--health); }
+.a-activity { background: var(--activity-soft); color: var(--activity); }
 .stat.wide { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr; column-gap: 14px; align-items: center; }
 .stat.wide .label { grid-column: 1 / -1; }
 .stat.wide .sub { align-self: center; }
@@ -217,7 +246,9 @@ input[type="date"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 .i-diaper { background: var(--diaper-soft); color: var(--diaper); }
 .i-pump { background: var(--pump-soft); color: var(--pump); }
 .i-sleep { background: var(--sleep-soft); color: var(--sleep); }
-.i-weight { background: var(--weight-soft); color: var(--weight); }
+.i-weight, .i-length { background: var(--weight-soft); color: var(--weight); }
+.i-health { background: var(--health-soft); color: var(--health); }
+.i-activity { background: var(--activity-soft); color: var(--activity); }
 .item .txt { flex: 1; min-width: 0; }
 .item .t1 { font-weight: 800; display: flex; align-items: center; gap: 6px; }
 .item .t2 { font-size: 14px; color: var(--muted); font-weight: 600; }
@@ -234,7 +265,7 @@ textarea.text { font-size: 16px; font-weight: 600; resize: vertical; min-height:
 .split span { flex: 1 1 0; min-width: max-content; border-radius: 7px; padding: 3px 8px; font-size: 12px; font-weight: 800; }
 .split .s1 { background: var(--feed); color: var(--on-accent); }
 .split .s2 { background: var(--feed-soft); color: var(--feed); }
-.item-tools { display: flex; gap: 8px; padding: 0 14px 12px 64px; }
+.item-tools { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px 64px; }
 .item-tools button, .btn-sm { border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 8px 14px; font-weight: 700; font-size: 14px; }
 .del { color: var(--danger); }
 .empty { padding: 26px 18px; text-align: center; color: var(--muted); font-weight: 600; }
@@ -374,6 +405,14 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <symbol id="i-pump" viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h16a1 1 0 0 1 .8 1.6L15 11.5V13h1a1 1 0 0 1 1 1v6a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-6a1 1 0 0 1 1-1h1v-1.5L3.2 4.6A1 1 0 0 1 4 3Zm5 13v1.5h3V16H9Zm0 3v1h3v-1H9Z"/></symbol>
   <symbol id="i-sleep" viewBox="0 0 24 24"><path fill="currentColor" d="M19.8 15.2A8.3 8.3 0 0 1 8.8 4.2a8.3 8.3 0 1 0 11 11Z"/><circle cx="17" cy="5.5" r="1.4" fill="currentColor"/><circle cx="20.2" cy="9.2" r=".9" fill="currentColor"/></symbol>
   <symbol id="i-weight" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Zm6 3.6a5.2 5.2 0 0 0-5.2 5.2h10.4A5.2 5.2 0 0 0 12 6.6Zm1.3 1.5-1.9 3.7h1.5l1.4-3.3-1-.4Z"/></symbol>
+  <symbol id="i-health" viewBox="0 0 24 24"><path fill="currentColor" d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6V3Z"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></symbol>
+  <symbol id="i-temp" viewBox="0 0 24 24"><path fill="currentColor" d="M10 4a2 2 0 1 1 4 0v9.3a4.5 4.5 0 1 1-4 0V4Zm2 11a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></symbol>
+  <symbol id="i-med" viewBox="0 0 24 24"><path fill="currentColor" d="M14.6 3.6a4.9 4.9 0 0 1 6.9 6.9l-11 11a4.9 4.9 0 0 1-6.9-6.9l11-11Zm-4.2 7.1L5 16.1a2.9 2.9 0 0 0 4.1 4.1l5.4-5.4-4.1-4.1Z"/></symbol>
+  <symbol id="i-vaccine" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m17 3 4 4M19 5l-3 3M14 5l5 5M15 6l-8.5 8.5-1.5 4.5 4.5-1.5L18 9M3 21l3-3M9 12l1.5 1.5M11.5 9.5 13 11"/></symbol>
+  <symbol id="i-symptom" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M11 6.5h2v7h-2zM11 15.5h2v2h-2z"/></symbol>
+  <symbol id="i-visit" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 3v6a4 4 0 0 0 8 0V3M10 13v2a5 5 0 0 0 10 0v-2"/><circle cx="20" cy="11" r="2" fill="currentColor"/></symbol>
+  <symbol id="i-length" viewBox="0 0 24 24"><path fill="currentColor" d="M3 8h18v8H3V8Zm2 2v4h14v-4h-1.5v2h-1v-2H15v2h-1v-2h-1.5v2h-1v-2H10v2H9v-2H7.5v2h-1v-2H5Z"/></symbol>
   <symbol id="i-stats" viewBox="0 0 24 24"><path fill="currentColor" d="M4 13a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7H4v-7Zm6-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12h-4V8Zm6 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v9h-4v-9ZM3 21h18v1.5H3V21Z"/></symbol>
   <symbol id="i-share" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
@@ -403,7 +442,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <button class="live" id="live" type="button" hidden>
     <span class="dot"></span>
     <span class="grow"><span id="liveTitle">Feeding</span><small id="liveSub"></small></span>
-    <span>Open</span>
+    <span id="liveAction">Open</span>
   </button>
   <button class="live sleep" id="liveSleep" type="button" hidden>
     <svg><use href="#i-sleep"/></svg>
@@ -417,6 +456,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
       <span class="big num" id="lastFeedAgo">None yet</span>
       <span class="sub" id="lastFeedSub">Tap Breastfeed or Bottle to log one</span>
       <span class="next" id="nextSide" hidden></span>
+      <span class="due-tag" id="feedDue" hidden>Feed due</span>
     </div>
     <div class="stat">
       <span class="label">Last diaper</span>
@@ -441,7 +481,9 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <button class="action a-diaper" type="button" data-open="diaper"><svg><use href="#i-diaper"/></svg>Diaper</button>
     <button class="action a-pump" type="button" data-open="pump"><svg><use href="#i-pump"/></svg>Pump</button>
     <button class="action a-sleep" type="button" data-open="sleep"><svg><use href="#i-sleep"/></svg>Sleep</button>
-    <button class="action a-weight" type="button" data-open="weight"><svg><use href="#i-weight"/></svg>Weight</button>
+    <button class="action a-weight" type="button" data-open="weight"><svg><use href="#i-weight"/></svg>Growth</button>
+    <button class="action a-health" type="button" data-open="health"><svg><use href="#i-health"/></svg>Health</button>
+    <button class="action a-activity" type="button" data-open="activity"><svg><use href="#i-activity"/></svg>Activity</button>
   </section>
 
   <div class="section-title"><h2>Today</h2><span>since midnight</span></div>
@@ -452,7 +494,7 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <div class="tot"><b class="num" id="tDirty">0</b><span>Dirty</span><em>diapers</em></div>
   </section>
 
-  <div class="section-title"><h2>Timeline</h2><span>tap an entry for notes or delete</span></div>
+  <div class="section-title"><h2>Timeline</h2><span>tap an entry to edit or delete</span></div>
   <section class="timeline" id="timeline" aria-label="Timeline"></section>
 </main>
 
@@ -462,11 +504,17 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 <section class="sheet" id="sheet-feed" role="dialog" aria-modal="true" aria-labelledby="feedTitle">
   <div class="grab"></div>
   <div class="sheet-head"><h3 id="feedTitle">Breastfeed</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
-  <div class="seg" role="group" aria-label="Mode">
+  <div class="seg" id="feedModes" role="group" aria-label="Mode">
     <button type="button" id="modeTimer" aria-pressed="true">Timer</button>
     <button type="button" id="modeManual" aria-pressed="false">Enter after</button>
   </div>
   <div class="pane" id="timerPane">
+    <div class="long-note" id="longNote" hidden>
+      <span id="longText">The right side has been running 50 minutes. Still feeding?</span>
+      <div class="btns"><button class="btn-sm" type="button" id="longKeep">Yes, keep going</button><button class="btn-sm" type="button" id="longSave">Save it now</button><button class="btn-sm del" type="button" id="longDiscard">Discard</button></div>
+      <span class="muted">After saving you can tap the entry to fix the minutes.</span>
+    </div>
+    <p class="muted" id="liveWho" style="margin:-6px 0 0;text-align:center" hidden></p>
     <div class="sides">
       <button class="side" type="button" id="sideL"><span class="tag" id="tagL" hidden>NEXT</span><span class="lr">Left</span><span class="clock num" id="clockL">0:00</span><span class="hint" id="hintL">Tap to start</span></button>
       <button class="side" type="button" id="sideR"><span class="tag" id="tagR" hidden>NEXT</span><span class="lr">Right</span><span class="clock num" id="clockR">0:00</span><span class="hint" id="hintR">Tap to start</span></button>
@@ -612,10 +660,17 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
 <!-- Weight sheet -->
 <section class="sheet" id="sheet-weight" role="dialog" aria-modal="true" aria-labelledby="weightTitle">
   <div class="grab"></div>
-  <div class="sheet-head"><h3 id="weightTitle">Weight</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="sheet-head"><h3 id="weightTitle">Growth</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="seg" id="gKindSeg" role="group" aria-label="Measure">
+    <button type="button" id="gKindW" aria-pressed="true">Weight</button>
+    <button type="button" id="gKindL" aria-pressed="false">Length</button>
+  </div>
   <div class="seg" role="group" aria-label="Unit">
-    <button type="button" id="wUnitLb" aria-pressed="true">Pounds and ounces</button>
-    <button type="button" id="wUnitKg" aria-pressed="false">Kilograms</button>
+    <button type="button" id="wUnitLb" aria-pressed="true">Pounds, ounces, inches</button>
+    <button type="button" id="wUnitKg" aria-pressed="false">Kilograms, cm</button>
+  </div>
+  <div class="pane" id="gLenPane" hidden>
+    <div class="stepper"><span class="lbl">Length</span><div class="ctl"><button type="button" id="lenMinus" aria-label="Shorter">−</button><span class="amt-wrap"><input class="amt-sm num" id="lenVal" type="text" inputmode="decimal" autocomplete="off" aria-label="Length" style="width:4.4ch"><span class="u" id="lenUnit">in</span></span><button type="button" id="lenPlus" aria-label="Longer">+</button></div></div>
   </div>
   <div class="pane" id="wLbPane" style="gap:10px">
     <div class="stepper"><span class="lbl">Pounds</span><div class="ctl"><button type="button" id="wLbMinus" aria-label="Less pounds">−</button><span class="amt-wrap"><input class="amt-sm num" id="wLb" type="text" inputmode="numeric" autocomplete="off" aria-label="Pounds"><span class="u">lb</span></span><button type="button" id="wLbPlus" aria-label="More pounds">+</button></div></div>
@@ -630,6 +685,67 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
   <input type="date" id="wDate" aria-label="Date weighed">
   <div class="note-wrap" data-note="weight"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-weight" rows="2" maxlength="500" placeholder="Optional note, for example: at the pediatrician" hidden></textarea></div>
   <button class="primary weight" type="button" id="weightSave">Save weight</button>
+</section>
+
+<!-- Health sheet -->
+<section class="sheet" id="sheet-health" role="dialog" aria-modal="true" aria-labelledby="healthTitle">
+  <div class="grab"></div>
+  <div class="sheet-head"><h3 id="healthTitle">Health</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="kinds health-kinds" role="group" aria-label="What to log">
+    <button class="kind" type="button" data-hkind="med" aria-pressed="true"><svg><use href="#i-med"/></svg>Medicine</button>
+    <button class="kind" type="button" data-hkind="temp" aria-pressed="false"><svg><use href="#i-temp"/></svg>Temp</button>
+    <button class="kind" type="button" data-hkind="vaccine" aria-pressed="false"><svg><use href="#i-vaccine"/></svg>Vaccine</button>
+    <button class="kind" type="button" data-hkind="symptom" aria-pressed="false"><svg><use href="#i-symptom"/></svg>Symptom</button>
+    <button class="kind" type="button" data-hkind="visit" aria-pressed="false"><svg><use href="#i-visit"/></svg>Doctor</button>
+  </div>
+  <div class="pane" id="hTempPane" hidden>
+    <div class="seg" role="group" aria-label="Temperature unit">
+      <button type="button" id="tUnitF" aria-pressed="true">°F</button>
+      <button type="button" id="tUnitC" aria-pressed="false">°C</button>
+    </div>
+    <div class="stepper"><span class="lbl">Temperature</span><div class="ctl"><button type="button" id="tMinus" aria-label="Lower">−</button><span class="amt-wrap"><input class="amt-sm num" id="tVal" type="text" inputmode="decimal" autocomplete="off" aria-label="Temperature" style="width:4.4ch"><span class="u" id="tUnitLbl">°F</span></span><button type="button" id="tPlus" aria-label="Higher">+</button></div></div>
+    <div class="field-label">How it was taken (optional)</div>
+  </div>
+  <div class="field-label" id="hDetailLabel">Medicine</div>
+  <input class="text" id="hDetail" type="text" maxlength="60" autocomplete="off" placeholder="For example: Vitamin D">
+  <div class="chips pick" id="hChips" role="group" aria-label="Suggestions"></div>
+  <div class="pane" id="hMedPane">
+    <div class="field-label">Dose (optional)</div>
+    <input class="text" id="hDose" type="text" maxlength="40" autocomplete="off" placeholder="For example: 1 drop or 400 IU">
+    <div class="field-label">Remind when the next dose is due</div>
+    <div class="chips pick" id="hRemind" role="group" aria-label="Reminder"></div>
+    <p class="muted" id="hRemindNote" style="margin:-6px 0 0">Reminders go to phones that turned on notifications (Settings).</p>
+  </div>
+  <div class="field-label">When</div>
+  <div class="chips when" data-for="health"></div>
+  <div class="note-wrap" data-note="health"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-health" rows="2" maxlength="500" placeholder="Optional note" hidden></textarea></div>
+  <button class="primary health" type="button" id="healthSave">Save medicine</button>
+</section>
+
+<!-- Activity sheet -->
+<section class="sheet" id="sheet-activity" role="dialog" aria-modal="true" aria-labelledby="activityTitle">
+  <div class="grab"></div>
+  <div class="sheet-head"><h3 id="activityTitle">Activity</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="chips pick" id="aChips" role="group" aria-label="Activity"></div>
+  <input class="text" id="aDetail" type="text" maxlength="40" autocomplete="off" placeholder="Or type one, for example: Baby massage">
+  <div class="field-label">How long (optional)</div>
+  <div class="oz-row">
+    <button type="button" id="aMinus" aria-label="Fewer minutes">−</button>
+    <label class="oz-big num" for="aMin"><input id="aMin" class="amt" type="text" inputmode="numeric" autocomplete="off" value="0" aria-label="Minutes"><small>min</small></label>
+    <button type="button" id="aPlus" aria-label="More minutes">+</button>
+  </div>
+  <div class="chips" id="aMinChips" role="group" aria-label="Quick durations" style="justify-content:center"></div>
+  <div class="field-label">Started</div>
+  <div class="chips when" data-for="activity"></div>
+  <div class="note-wrap" data-note="activity"><button class="ghost add-note" type="button">+ Add a note</button><textarea class="text note-in" id="note-activity" rows="2" maxlength="500" placeholder="Optional note" hidden></textarea></div>
+  <button class="primary activity" type="button" id="activitySave" disabled>Choose an activity</button>
+</section>
+
+<!-- Sync details sheet -->
+<section class="sheet" id="sheet-sync" role="dialog" aria-modal="true" aria-labelledby="syncTitle">
+  <div class="grab"></div>
+  <div class="sheet-head"><h3 id="syncTitle">Sync</h3><button class="x" type="button" data-close aria-label="Close">×</button></div>
+  <div class="pane" id="syncBody"></div>
 </section>
 
 <!-- Stats sheet -->
@@ -680,6 +796,12 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <div class="st-sub">Every weigh-in</div>
     <svg class="st-chart" id="chWeight" role="img" aria-label="Weight over time"></svg>
     <div class="st-detail" id="stWeightDetail"></div>
+  </div>
+  <div class="st-card">
+    <div class="st-head"><h4>Length</h4><span id="stLengthHead"></span></div>
+    <div class="st-sub">Every measurement</div>
+    <svg class="st-chart" id="chLength" role="img" aria-label="Length over time"></svg>
+    <div class="st-detail" id="stLengthDetail"></div>
   </div>
   <details class="st-more"><summary>Show as a table</summary><div class="st-table" id="stTable"></div></details>
 </section>

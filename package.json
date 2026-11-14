@@ -1,0 +1,11 @@
+{
+  "name": "baby-log",
+  "private": true,
+  "description": "Baby Log: a shared newborn log on GitHub Pages that writes to your own Google Sheet",
+  "scripts": {
+    "test": "node tests/run.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.0"
+  }
+}

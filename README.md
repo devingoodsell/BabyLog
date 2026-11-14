@@ -1,24 +1,30 @@
 # Baby Log
 
-A phone app for logging a newborn's feeds, diapers, sleep and weight, shared by everyone who cares for the baby. Entries go into a private Google Sheet that you own.
+A phone app for logging a newborn's feeds, diapers, sleep, growth and health, shared by everyone who cares for the baby. Entries go into a private Google Sheet that you own.
 
 ![Baby Log home screen, a breastfeed timer in progress, and the Stats page](docs/screenshots/overview.png)
 
-- **Breastfeeds:** a left and right timer (tap to start, switch or pause), or enter minutes per side after the fact (type them or use + and -). Records which side you started and ended on.
+- **Breastfeeds:** a left and right timer (tap to start, switch or pause) that every phone shares, so a feed started on one phone can be switched, paused or saved on another. Or enter minutes per side after the fact (type them or use + and -). Records which side you started and ended on. A side left running over 45 minutes asks "Still feeding?".
 - **Bottles and syringes:** ounces or mL (0.1 mL steps), and breast milk or formula.
 - **Diapers:** wet, dirty, or both.
 - **Pumping:** left, right or both, minutes, how much came from each breast (oz or mL, optional), and an optional storage label (for example, "Bag 12").
 - **Sleep:** start a timer when the baby falls asleep and anyone can end it from their own phone at wake-up, or enter the start and end afterwards. Home shows how long the baby has been asleep or awake.
-- **Weight:** pounds and ounces, or kilograms. Weigh-ins can be backdated up to a year, so the birth weight can go in too.
-- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus a weight chart of every weigh-in with the change between them.
+- **Growth:** weight (pounds and ounces, or kilograms) and length (inches or cm). Measurements can be backdated up to a year, so birth weight and length can go in too.
+- **Health:** medicine and doses (with an optional "remind me when the next dose is due"), temperature (°F or °C), vaccines, symptoms and doctor visits.
+- **Activities:** tummy time, bath, walks or anything you type, with optional minutes.
+- **Edit anything:** tap an entry to change its time, amounts, sides or details, or to delete it. Undo is offered after every change.
+- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus weight and length charts of every measurement with the change between them.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
-- **Works offline:** entries wait on the phone and save when it reconnects.
+- **Reminders (optional):** notifications when a feed is due, when the breastfeed timer has run too long, or when the next dose of a medicine is due. Each person picks their own.
+- **Works offline:** entries wait on the phone and save when it reconnects. Tap the sync pill to see anything still waiting and why.
 - Runs on iPhone, Android or any phone browser, and can be added to the Home Screen like an app. Nobody needs a Google account except the person who sets it up.
 
 ![Logging a syringe feed in mL, a pump session with amounts per side and a storage label, and the shared timeline with notes](docs/screenshots/logging.png)
 
 ![A sleep in progress that anyone can end, logging a weigh-in in pounds and ounces, and the sleep and weight charts](docs/screenshots/sleep-and-weight.png)
+
+![Logging a medicine with a dose reminder, an activity, and editing an earlier entry](docs/screenshots/health-and-editing.png)
 
 ![Dark mode for night feeds, and managing who has access](docs/screenshots/night-and-sharing.png)
 
@@ -26,7 +32,7 @@ A phone app for logging a newborn's feeds, diapers, sleep and weight, shared by 
 
 It costs nothing to run: the app is hosted free on GitHub Pages and the data lives in your own Google account.
 
-Optionally, log diapers and bottles hands-free by saying "Hey Google, log a wet diaper" to any Google speaker in the house (see [Log by voice with Google Home](#optional-log-by-voice-with-google-home)).
+Optionally, log diapers and bottles hands-free by saying "Hey Google, log a wet diaper" to any Google speaker in the house (see [Log by voice with Google Home](#optional-log-by-voice-with-google-home)), and turn on [reminder notifications](#optional-reminder-notifications).
 
 ## How it fits together
 
@@ -37,9 +43,14 @@ Phone (Baby Log app, served from GitHub Pages: screens only, no data, no keys)
 Apps Script attached to your Baby Log sheet (apps-script/Code.gs)
   • @OnlyCurrentDoc: can reach this one spreadsheet and nothing else in your Drive
   • checks the device key on every request
-  • can only add, list, delete and annotate entries, end sleeps, and manage invites
+  • can only add, change, list and delete entries, share the feed timer, and manage invites
   ▼
 Your Baby Log Google Sheet (never shared or published)
+
+Optional, on your own Google Cloud (google-home/server.js on Cloud Run):
+  • Google Home voice commands  → the same Apps Script
+  • reminders: every 5 minutes the Apps Script checks what is due and hands notifications
+    to this service, which encrypts and delivers them to the phones that turned them on
 ```
 
 ---
@@ -92,9 +103,9 @@ The script must be opened from the sheet with **Extensions → Apps Script**. A 
 
 | Tab | What it holds |
 |---|---|
-| **Dashboard** | Last feed, last diapers, and 24-hour and since-midnight totals |
+| **Dashboard** | Last feed, diapers, pump, wake-up, weight, length and medicine, and 24-hour and since-midnight totals including pumps, milk removal and hours asleep |
 | **Log** | One row per entry. This is where the app writes. |
-| **Daily** | Per-day totals |
+| **Daily** | Per-day totals, including pumps, milk removal and hours asleep |
 | **Devices** | Each phone with access: who, when it was last used, and whether it's active |
 | **Invites** | Invite links and setup codes. Codes are stored only as hashes. |
 
@@ -259,6 +270,34 @@ Notes:
 - **Add more voice commands:** add an entry to `SCENES` at the top of `google-home/server.js`, run `./deploy.sh`, say "Hey Google, sync my devices", then add a matching automation to the script at home.google.com.
 - **Delete it:** `gcloud run services delete babylog-home --region us-east1`
 
+## Optional: reminder notifications
+
+Each person can get a notification on their phone, even with the app closed, when:
+
+- **a feed is due:** no feed for 2, 2.5, 3 or 4 hours (their choice)
+- **the breastfeed timer has run long:** one side over 45 minutes, usually a timer someone forgot to stop
+- **a medicine is due:** when logging a dose, pick "Remind when the next dose is due" (every 4 to 24 hours)
+
+How it works: every 5 minutes the Apps Script checks the sheet. When something is due it hands the notification to the cloud service from the Google Home section, which encrypts it and delivers it through the phone's own notification service (Apple, Google or Mozilla). Each alert is sent once.
+
+```
+Apps Script, every 5 minutes: is a feed, timer or dose due?
+  → POST /push with a secret only it knows → your Cloud Run service
+  → Web Push (encrypted, signed with your own VAPID key) → the phones that turned notifications on
+```
+
+Set it up once:
+
+1. **Update the script.** Paste the latest `apps-script/Code.gs` into Apps Script and click **Save**.
+2. **Turn reminders on.** In the function menu choose **setupReminders** and click **Run**. Google asks for two new permissions: to connect to an external service (your cloud service) and to run while you're not using it (the 5-minute check). It still only reaches this one spreadsheet.
+3. **Publish a new version** of the web app (see [Making changes later](#making-changes-later)).
+4. **Deploy the cloud service.** If you set up Google Home voice commands, run `git pull` and then `./deploy.sh` again in Cloud Shell. If not, do steps [A and B of the Google Home section](#a-give-the-service-its-own-key) only; you don't need the Google Home steps after that. Either way the script creates the notification keys and links them to your sheet, and ends with "Reminders linked."
+5. **On each phone:** tap your initial → **Notifications on this phone**, allow notifications, and pick the reminders you want. **Send a test notification** checks the whole path.
+
+On iPhone, notifications only work in the Home Screen app (iOS 16.4 or later), not in Safari. Open Baby Log from the Home Screen icon and turn them on there. Android works in Chrome or the installed app.
+
+To stop: turn the switch off on that phone. To stop for everyone, delete the `checkAlerts` trigger in Apps Script under **Triggers** (the clock icon).
+
 ## Making changes later
 
 There are two kinds of change, and they update differently.
@@ -276,6 +315,10 @@ There are two kinds of change, and they update differently.
 
 The web address stays the same. Don't use **New deployment** for updates: it creates a second address that the app doesn't know about.
 
+**The sheet's summary tabs.** The Dashboard and Daily tabs hold only formulas, made when you first ran setup. To get the newest version (with pumps, milk removal, sleep, growth and medicine), use the **Baby Log** menu in the sheet → **Rebuild Dashboard and Daily tabs**. It replaces those two tabs; the Log is not touched.
+
+**Tests.** `npm test` runs the browser tests in `tests/` against the real `Code.gs` on an in-memory sheet (`tests/mock-server.js`). They also run on GitHub on every push (`.github/workflows/test.yml`). To run them on your computer: `npm install`, `npm ci --prefix google-home`, `npx playwright install chromium`, then `npm test`.
+
 ## Managing access
 
 - **Remove someone:** in the app, go to **Settings → People with access → Remove**. In the sheet, you can instead set their row's **Status** on the Devices tab to `Revoked`. Either way, that phone loses access on its next request.
@@ -290,12 +333,12 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
 
 | Column | Contents |
 |---|---|
-| Time | When it happened. For breastfeeds and pumps, when they started. For sleeps, when the baby fell asleep. A weigh-in backdated to an earlier day is set to midday. |
-| Event | `Breastfeed`, `Bottle`, `Pump`, `Sleep`, `Weight`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
+| Time | When it happened. For breastfeeds, pumps and activities, when they started. For sleeps, when the baby fell asleep. A weight or length backdated to an earlier day is set to midday, and the app shows it by date only. |
+| Event | `Breastfeed`, `Bottle`, `Pump`, `Sleep`, `Weight`, `Length`, `Medicine`, `Temperature`, `Vaccine`, `Symptom`, `Doctor visit`, `Activity`, `Wet diaper`, `Dirty diaper` or `Wet + dirty diaper` |
 | Left min, Right min | Breastfeed minutes per side |
 | Bottle oz | Always in ounces, with mL converted at 29.5735 mL per oz, so totals add up |
 | First side, Last side | Where a breastfeed started and ended |
-| End | When a breastfeed, pump or sleep ended. Empty while a sleep is still going. |
+| End | When a breastfeed, pump, sleep or timed activity ended. Empty while a sleep is still going. |
 | Logged by, Logged at | Who logged it, and when they pressed Save |
 | Notes | Optional note |
 | ID | Used by the app. Leave it alone. |
@@ -304,21 +347,30 @@ The web address stays the same. Don't use **New deployment** for updates: it cre
 | Left pumped, Right pumped, Pump unit, Pumped oz | Amount from each breast as entered, `oz` or `mL`, and the total converted to ounces so it can be summed. Empty when no amount was entered. |
 | Sleep min | How long a sleep lasted. Filled in when someone taps Save sleep at wake-up. |
 | Weight lb, Weight | The weight in decimal pounds (for charts and formulas) and as written, for example `7 lb 9.5 oz`. Weights entered in kg are converted. |
+| Detail | The medicine, vaccine, symptom, visit reason, how a temperature was taken, or the activity |
+| Dose, Remind h | A medicine's dose as typed, and how many hours until the next dose is due (empty for no reminder) |
+| Temp F, Temp | A temperature in °F (for charts and formulas) and as entered, for example `38.2 °C` |
+| Length in, Length | Length in inches and as entered, for example `52 cm` |
+| Activity min | How long an activity lasted, when entered |
+| Updated at | When the row was last added or changed from the app. Phones use it to download only what changed. |
 
-You can fix a value by hand in the sheet. The app picks up the change on its next refresh. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
+You can fix a value by hand in the sheet. The app picks up hand edits within 10 minutes (each phone downloads everything again at least that often), or right away when you tap the sync pill. Rows you add by hand appear in the app too, as long as Time and Event are filled in.
 
 ## Troubleshooting
 
 | What you see | What to do |
 |---|---|
 | "Baby Log is almost ready" | `config.js` has no `apiUrl` yet (step 7), or GitHub Pages hasn't updated. Wait a minute and reload. |
-| A new script feature doesn't save (for example, notes, mL or sleep minutes stay empty in the sheet, or sleeps can't be ended) | The web app is still running the old copy. Publish a **New version** (see [Making changes later](#making-changes-later)). |
+| A new script feature doesn't save (for example, notes, mL or sleep minutes stay empty in the sheet, sleeps can't be ended, edits are refused, or the feed timer doesn't show on other phones) | The web app is still running the old copy. Publish a **New version** (see [Making changes later](#making-changes-later)). |
 | "This invite cannot be used" | The link was already used or has expired. Create a new one. |
 | "This phone no longer has access" | The phone was removed or signed out. Send it a new invite. |
 | "Anyone" isn't offered when deploying | Your Google Workspace blocks sharing outside the organization (see step 6). |
 | Google Home: deploy fails with "the default service account is missing required IAM permissions" | `deploy.sh` grants the build account the Cloud Run Builder role automatically. If you see this on an older copy of the script, run `git pull` and `./deploy.sh` again. |
 | Google Home: deploy fails with a permission or organization policy error | Your organization may require sign-in for all Cloud Run services (policy `run.managed.requireInvokerIam`). An organization admin can turn that policy off for this project. |
 | Google Home says "Sorry, it looks like Baby Log is unavailable" | Check the service logs: `gcloud run services logs read babylog-home --region us-east1`. A `log failed` line with `unauthorized` means the Google Home key was removed. Create a new "Google Home" invite in the app and run `./deploy.sh --new-key`. Nothing needs re-linking. |
+| Reminders: no "Notifications on this phone" switch | On iPhone, open Baby Log from the Home Screen icon (iOS 16.4 or later). If it says reminders are not set up, follow [reminder notifications](#optional-reminder-notifications). |
+| Reminders: the test works but no reminders arrive | Check that the `checkAlerts` trigger exists in Apps Script under **Triggers**; run **setupReminders** again if not. The trigger's run history there shows any errors. |
+| Something stays "waiting" | Tap the sync pill. It lists each waiting change and the last error, with **Try now** and **Discard**. |
 | Times in the sheet are off by hours | Set the sheet's time zone under **File → Settings**. |
 | The permission screen asks for your whole Drive | The `@OnlyCurrentDoc` line at the top of `Code.gs` is missing. Paste the file again. |
 
@@ -331,6 +383,7 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 - **Invites are single-use** and expire. The code travels after the `#` in the link, which browsers never send to any server, and the app clears it from the address bar once it's used. A forwarded or screenshotted invite that has already been used gets nobody in.
 - **The app loads nothing from other websites.** It ships its own fonts, sends no referrer, and its content security policy only allows connections to Google Apps Script.
 - **Notes and names can't become formulas.** Text that starts with `=`, `+`, `-` or `@` is stored as plain text.
+- **Reminders stay private.** The script sends notifications to your own cloud service with a secret only the two share; the service encrypts each one for the receiving phone, so the delivery service (Apple, Google or Mozilla) can't read it. Phones' notification addresses are kept in the Push tab of your sheet.
 - **What remains:** anyone holding an unlocked phone that's already signed in can log entries, as with any app.
 
 ## Files
@@ -339,5 +392,7 @@ You can fix a value by hand in the sheet. The app picks up the change on its nex
 - `config.js`: your Apps Script web app URL (not a secret)
 - `sw.js`, `manifest.webmanifest`, `icons/`: Home Screen install and offline start
 - `apps-script/Code.gs`: the backend, pasted into the sheet's Apps Script
-- `google-home/`: the optional Google Home voice service (`server.js`, `deploy.sh`, `icon-144.png`)
+- `google-home/`: the optional cloud service for Google Home voice commands and reminders (`server.js`, `deploy.sh`, `icon-144.png`)
+- `tests/`: browser tests (`npm test`), the in-memory test server, and the scripts that make the README screenshots
+- `.github/workflows/test.yml`: runs the tests on every push
 - `fonts/`: Nunito, under the SIL Open Font License, served locally so the app loads nothing from other sites

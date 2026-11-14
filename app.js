@@ -5,7 +5,7 @@
   const CFG = window.BABYLOG_CONFIG || {};
   const MIN = 60000;
   const $ = id => document.getElementById(id);
-  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active', PREFS: 'bl.prefs' };
+  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active', PREFS: 'bl.prefs', SYNC: 'bl.sync', LONG: 'bl.longAck' };
 
   /* ================================================================ */
   /* Storage                                                           */
@@ -16,10 +16,10 @@
 
   let auth = load(K.AUTH, null);           // { token, name, role, deviceId }
   let entries = load(K.ENTRIES, []);        // newest data we know about, including unsent entries
-  let outbox = load(K.OUTBOX, []);          // [{op:'add', entry} | {op:'delete', id} | {op:'note', id, note} | {op:'endSleep', id, end}]
-  let active = load(K.ACTIVE, null);        // breastfeed timer on this phone
+  let outbox = load(K.OUTBOX, []);          // steps waiting to be sent: add, edit, delete, note, endSleep, live
+  let active = load(K.ACTIVE, null);        // the household's breastfeed timer, shared through the sheet
   // This phone's bottle settings: last unit, last amount per unit, last milk
-  const prefs = Object.assign({ unit: 'oz', amount: { oz: 2, ml: 5 }, source: null, weightUnit: 'lb' }, load(K.PREFS, {}));
+  const prefs = Object.assign({ unit: 'oz', amount: { oz: 2, ml: 5 }, source: null, weightUnit: 'lb', tempUnit: 'F', feedHours: null }, load(K.PREFS, {}));
 
   const saveEntries = () => store(K.ENTRIES, entries);
   const saveOutbox = () => store(K.OUTBOX, outbox);
@@ -38,20 +38,26 @@
   /* ================================================================ */
   /* API                                                               */
   /* ================================================================ */
+  const API_TIMEOUT = 15000;   // a stuck connection gives up and retries later instead of hanging
   async function api(action, payload) {
     if (!CFG.apiUrl) { const e = new Error('Baby Log is not connected to the sheet yet.'); e.code = 'not_configured'; throw e; }
     let res;
+    const ctrl = window.AbortController ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), API_TIMEOUT) : null;
     try {
       res = await fetch(CFG.apiUrl, {
         method: 'POST',
         body: JSON.stringify(Object.assign({ action: action, token: auth ? auth.token : undefined }, payload || {})),
-        redirect: 'follow', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer'
+        redirect: 'follow', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+        signal: ctrl ? ctrl.signal : undefined
       });
     } catch (err) {
-      const e = new Error('No connection'); e.code = 'offline'; throw e;
+      clearTimeout(timer);
+      const e = new Error(err && err.name === 'AbortError' ? 'The sheet took too long to answer' : 'No connection'); e.code = 'offline'; throw e;
     }
     let j;
     try { j = await res.json(); } catch (err) { const e = new Error('The sheet did not answer. Try again.'); e.code = 'offline'; throw e; }
+    finally { clearTimeout(timer); }
     if (!j.ok) {
       const e = new Error(j.message || j.error || 'Something went wrong'); e.code = j.error;
       if (j.error === 'unauthorized' && auth) lockedOut();
@@ -63,78 +69,174 @@
   /* ================================================================ */
   /* Sync                                                              */
   /* ================================================================ */
-  let flushing = false, online = true, lastSync = 0, refreshSoon = false;
+  // Every change is saved on the phone first, then sent in order from the outbox. One that keeps
+  // failing waits and retries on its own (5 s, 10 s, 20 s ... up to 5 min) without holding up the rest.
+  let flushing = false, online = true, lastSync = 0, refreshSoon = false, inflight = null;
+  let localRev = 0;                         // goes up with every change made on this phone
+  let syncedAt = load(K.SYNC, 0);           // server time of the last list, for change-only syncs
+  let lastFull = 0, polls = 0;
+  const touch = () => { localRev++; };
+  const opId = o => o.id || (o.entry && o.entry.id) || (o.op === 'live' ? 'live' : '');
 
   function setSync() {
     const el = $('sync');
     if (!el) return;
     let state = 'ok', text = 'Saved';
+    const stuck = outbox.some(o => o.tries);
     if (flushing) { state = 'saving'; text = 'Saving'; }
     else if (!online) { state = 'offline'; text = outbox.length ? 'Offline · ' + outbox.length + ' waiting' : 'Offline'; }
-    else if (outbox.length) { state = 'saving'; text = outbox.length + ' waiting'; }
+    else if (outbox.length) { state = stuck ? 'offline' : 'saving'; text = outbox.length + ' waiting'; }
     el.dataset.state = state;
     $('syncText').textContent = text;
+    if (openSheet === $('sheet-sync')) renderSyncSheet();
+  }
+
+  async function sendOp(op) {
+    const strip = e => { const c = Object.assign({}, e); delete c.pending; delete c.by; return c; };
+    if (op.op === 'add') {
+      await api('add', { entry: strip(op.entry) });
+      const e = entries.find(x => x.id === op.entry.id);
+      if (e && !outbox.some(o => o !== op && opId(o) === e.id)) delete e.pending;
+    } else if (op.op === 'edit') {
+      await api('edit', { entry: strip(op.entry) });
+      const e = entries.find(x => x.id === op.entry.id);
+      if (e && !outbox.some(o => o !== op && opId(o) === e.id)) delete e.pending;
+    } else if (op.op === 'note') {
+      await api('update', { id: op.id, note: op.note });
+    } else if (op.op === 'endSleep') {
+      const r = await api('endSleep', { id: op.id, end: op.end, reopen: !!op.reopen });
+      // Someone else woke him up first: their time stands
+      const e = entries.find(x => x.id === op.id);
+      if (e && r.already) { e.end = r.end; e.minutes = r.minutes; toast('Already ended on another phone at ' + fmtTime(r.end)); }
+    } else if (op.op === 'live') {
+      const r = await api('live', { state: op.state, replace: !!op.replace });
+      if (r.conflict && !outbox.some(o => o !== op && o.op === 'live')) {
+        active = r.live; saveActive(); renderTimer(); renderLive();
+        toast((r.live.by || 'Someone') + ' already started a feed. You are now seeing that one.');
+      }
+    } else {
+      await api('delete', { id: op.id });
+    }
+  }
+
+  // The next step to send: the first one for each entry, skipping any that already failed in this
+  // round or are waiting to retry. A later step for the same entry waits behind an earlier one.
+  function nextOp(tried) {
+    const seen = new Set();
+    for (const o of outbox) {
+      const k = opId(o);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (tried.has(o) || (o.nextTry && o.nextTry > Date.now())) continue;
+      return o;
+    }
+    return null;
   }
 
   async function flush() {
     if (flushing || !auth) return;
     flushing = true; setSync();
+    const tried = new Set();
     try {
-      while (outbox.length && auth) {
-        const op = outbox[0];
+      let op;
+      while (auth && (op = nextOp(tried))) {
+        tried.add(op);
+        inflight = op;
         try {
-          if (op.op === 'add') {
-            const send = Object.assign({}, op.entry); delete send.pending; delete send.by;
-            await api('add', { entry: send });
-            const e = entries.find(x => x.id === op.entry.id);
-            if (e) delete e.pending;
-          } else if (op.op === 'note') {
-            await api('update', { id: op.id, note: op.note });
-          } else if (op.op === 'endSleep') {
-            await api('endSleep', { id: op.id, end: op.end });
-          } else {
-            await api('delete', { id: op.id });
-          }
-          outbox.shift(); saveOutbox(); saveEntries();
+          await sendOp(op);
+          const k = outbox.indexOf(op);
+          if (k !== -1) outbox.splice(k, 1);
+          saveOutbox(); saveEntries();
           online = true;
         } catch (err) {
           if (err.code === 'bad_request' || err.code === 'forbidden') {
-            outbox.shift(); saveOutbox();
+            const k = outbox.indexOf(op);
+            if (k !== -1) outbox.splice(k, 1);
+            saveOutbox();
             if (op.op === 'add') { entries = entries.filter(x => x.id !== op.entry.id); saveEntries(); }
-            if (op.op === 'note' || op.op === 'endSleep') { refreshSoon = true; }
+            else refreshSoon = true;
             toast("Couldn't save: " + err.message);
-            render();
             continue;
           }
-          if (err.code !== 'unauthorized') online = false;
-          break;
+          if (err.code === 'unauthorized') break;
+          if (err.code === 'offline' && !/too long/.test(err.message)) { online = false; break; }
+          // A server hiccup or a slow answer: try this one again later, carry on with the rest
+          op.tries = (op.tries || 0) + 1;
+          op.lastError = err.message;
+          op.nextTry = Date.now() + Math.min(300000, 5000 * Math.pow(2, op.tries - 1));
+          saveOutbox();
+        } finally {
+          inflight = null;
         }
       }
     } finally {
       flushing = false; setSync(); render();
-      if (refreshSoon) { refreshSoon = false; setTimeout(refresh, 500); }
+      if (refreshSoon) { refreshSoon = false; setTimeout(() => refresh(true), 500); }
+      const next = outbox.filter(o => o.nextTry).map(o => o.nextTry).sort((x, y) => x - y)[0];
+      clearTimeout(flush.retry);
+      if (next && online) flush.retry = setTimeout(flush, Math.max(1000, next - Date.now() + 50));
     }
   }
 
-  async function refresh() {
+  // Pulls entries from the sheet. Most polls ask only for what changed since the last one.
+  let refreshing = null, again = false, againFull = false;
+  function refresh(full) {
+    if (refreshing) { again = true; againFull = againFull || !!full; return refreshing; }
+    refreshing = doRefresh(!!full).finally(() => {
+      refreshing = null;
+      if (again) { const f = againFull; again = false; againFull = false; setTimeout(() => refresh(f), 300); }
+    });
+    return refreshing;
+  }
+  async function doRefresh(full) {
     if (!auth) return;
     await flush();
-    if (!auth || outbox.length) return;
+    if (!auth) return;
+    polls++;
+    const wantFull = full || !syncedAt || Date.now() - lastFull > 10 * 60000;
+    const rev = localRev;
+    let j;
     try {
-      const j = await api('list');
-      auth.name = j.me.name; auth.role = j.me.role; store(K.AUTH, auth);
-      const server = j.entries || [];
-      const pendingAdds = outbox.filter(o => o.op === 'add').map(o => o.entry);
-      const pendingDel = new Set(outbox.filter(o => o.op === 'delete').map(o => o.id));
-      entries = server.filter(e => !pendingDel.has(e.id)).concat(pendingAdds.filter(p => !server.some(s => s.id === p.id)));
-      outbox.filter(o => o.op === 'note').forEach(o => { const e = entries.find(x => x.id === o.id); if (e) e.note = o.note; });
-      outbox.filter(o => o.op === 'endSleep').forEach(o => { const e = entries.find(x => x.id === o.id); if (e) { e.end = o.end; e.minutes = Math.round((o.end - e.t) / MIN); } });
-      saveEntries();
-      online = true; lastSync = Date.now();
+      j = await api('list', wantFull ? {} : { since: syncedAt });
     } catch (err) {
       if (err.code === 'offline') online = false;
+      setSync(); render();
+      return;
     }
-    setSync(); render();
+    // Something changed on this phone while the list was loading: that answer may predate the
+    // change and would briefly undo it on screen. Ask again instead.
+    if (localRev !== rev) { again = true; againFull = againFull || wantFull; return; }
+    auth.name = j.me.name; auth.role = j.me.role; store(K.AUTH, auth);
+    const pending = new Set(outbox.map(opId));
+    if (j.delta) {
+      const gone = new Set((j.deleted || []).filter(id => !pending.has(id)));
+      entries = entries.filter(e => !gone.has(e.id));
+      (j.entries || []).forEach(s => {
+        if (pending.has(s.id)) return;
+        const k = entries.findIndex(e => e.id === s.id);
+        if (k === -1) entries.push(s); else entries[k] = s;
+      });
+      const cutoff = Date.now() - 31 * 86400000;
+      entries = entries.filter(e => e.t >= cutoff || e.type === 'weight' || e.type === 'length' || pending.has(e.id));
+    } else {
+      // Local entries with unsent changes are the newest version; everything else comes from the sheet
+      const mine = entries.filter(e => pending.has(e.id));
+      entries = (j.entries || []).filter(s => !pending.has(s.id)).concat(mine);
+      const del = new Set(outbox.filter(o => o.op === 'delete').map(o => o.id));
+      entries = entries.filter(e => !del.has(e.id));
+      lastFull = Date.now();
+    }
+    // The shared breastfeed timer: the sheet's copy wins unless this phone has a change waiting
+    if (!outbox.some(o => o.op === 'live')) {
+      const sv = j.live || null;
+      if (sv && entries.some(e => e.id === sv.id)) { active = null; } else active = sv;
+      saveActive();
+    }
+    syncedAt = j.syncedAt || Date.now(); store(K.SYNC, syncedAt);
+    saveEntries();
+    online = true; lastSync = Date.now();
+    setSync(); render(); renderLive();
+    if (openSheet === $('sheet-feed')) renderTimer();
   }
 
   function newId() {
@@ -142,6 +244,9 @@
     const b = new Uint8Array(16); crypto.getRandomValues(b);
     return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
   }
+  // The not-yet-sent step for an entry that can still be changed in place (not the one being sent)
+  const pendingOp = (id, kind) => outbox.find(o => o.op === kind && opId(o) === id && o !== inflight);
+  const saveAll = () => { saveEntries(); saveOutbox(); render(); setSync(); };
 
   function addEntry(e, opts) {
     e.id = e.id || newId();
@@ -149,20 +254,39 @@
     e.pending = true;
     entries.push(e);
     outbox.push({ op: 'add', entry: e });
-    saveEntries(); saveOutbox(); render(); setSync();
+    touch(); saveAll();
     if (!(opts && opts.quiet)) toast((opts && opts.msg) || describe(e).t1 + ' saved', () => removeEntry(e.id, { quiet: true }));
+    flush();
+  }
+
+  // Replaces an entry's details. Who logged it stays the same.
+  function editEntry(e, opts) {
+    const i = entries.findIndex(x => x.id === e.id);
+    if (i === -1) return;
+    const before = Object.assign({}, entries[i]);
+    e.by = before.by;
+    if (e.note == null) e.note = before.note || '';
+    e.pending = true;
+    entries[i] = e;
+    const add = pendingOp(e.id, 'add');
+    if (add) add.entry = e;
+    else {
+      outbox = outbox.filter(o => !(opId(o) === e.id && (o.op === 'edit' || o.op === 'note' || o.op === 'endSleep') && o !== inflight));
+      outbox.push({ op: 'edit', entry: e });
+    }
+    touch(); saveAll();
+    if (!(opts && opts.quiet)) toast('Changes saved', () => { delete before.pending; editEntry(before, { quiet: true }); });
     flush();
   }
 
   function removeEntry(id, opts) {
     const e = entries.find(x => x.id === id);
     entries = entries.filter(x => x.id !== id);
-    outbox = outbox.filter((o, n) => !((o.op === 'note' || o.op === 'endSleep') && o.id === id && !(flushing && n === 0)));
-    const i = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
-    if (i > 0 || (i === 0 && !flushing)) outbox.splice(i, 1);
-    else outbox.push({ op: 'delete', id: id });
+    const add = pendingOp(id, 'add');
+    outbox = outbox.filter(o => !(opId(o) === id && o !== inflight && o.op !== 'delete'));
+    if (!add) outbox.push({ op: 'delete', id: id });
     openItem = null;
-    saveEntries(); saveOutbox(); render(); setSync();
+    touch(); saveAll();
     if (e && !(opts && opts.quiet)) {
       toast('Entry deleted', () => { const copy = Object.assign({}, e); delete copy.pending; addEntry(copy, { quiet: true }); });
     }
@@ -175,28 +299,39 @@
     if (!e) return;
     const before = e.note || '';
     e.note = note;
-    const pendingAdd = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
-    if (pendingAdd > 0 || (pendingAdd === 0 && !flushing)) outbox[pendingAdd].entry.note = note;
+    const add = pendingOp(id, 'add') || pendingOp(id, 'edit');
+    if (add) add.entry.note = note;
     else {
-      outbox = outbox.filter((o, n) => !(o.op === 'note' && o.id === id && !(flushing && n === 0)));
+      outbox = outbox.filter(o => !(o.op === 'note' && o.id === id && o !== inflight));
       outbox.push({ op: 'note', id: id, note: note });
     }
     editingNote = null; openItem = null;
-    saveEntries(); saveOutbox(); render(); setSync();
+    touch(); saveAll();
     toast(note ? 'Note saved' : 'Note removed', () => updateNote(id, before));
     flush();
   }
 
-  // Ends an open sleep. Whoever started it, any phone can end it.
-  function endSleep(id, end) {
+  // Ends an open sleep. Whoever started it, any phone can end it. Undo reopens it.
+  function endSleep(id, end, reopen) {
     const e = entries.find(x => x.id === id);
     if (!e) return;
-    e.end = end; e.minutes = Math.round((end - e.t) / MIN);
-    const i = outbox.findIndex(o => o.op === 'add' && o.entry.id === id);
-    if (i > 0 || (i === 0 && !flushing)) { outbox[i].entry.end = e.end; outbox[i].entry.minutes = e.minutes; }
-    else outbox.push({ op: 'endSleep', id: id, end: end });
-    saveEntries(); saveOutbox(); render(); setSync();
-    toast('Sleep saved · ' + durText(e.minutes));
+    if (reopen) { e.end = null; e.minutes = null; } else { e.end = end; e.minutes = Math.round((end - e.t) / MIN); }
+    const add = pendingOp(id, 'add') || pendingOp(id, 'edit');
+    const queued = pendingOp(id, 'endSleep');
+    if (add) { add.entry.end = e.end; add.entry.minutes = e.minutes; }
+    else if (queued && reopen && !queued.reopen) outbox.splice(outbox.indexOf(queued), 1);   // never sent: just drop it
+    else outbox.push(reopen ? { op: 'endSleep', id: id, reopen: true } : { op: 'endSleep', id: id, end: end });
+    touch(); saveAll();
+    if (reopen) toast('Sleep is going again');
+    else toast('Sleep saved · ' + durText(e.minutes), () => endSleep(id, null, true));
+    flush();
+  }
+
+  // Sends the shared breastfeed timer (or its end) to the sheet. Only the latest state matters.
+  function queueLive(replace) {
+    outbox = outbox.filter(o => !(o.op === 'live' && o !== inflight));
+    outbox.push({ op: 'live', state: active ? Object.assign({}, active) : null, replace: !!replace });
+    touch(); saveOutbox(); setSync();
     flush();
   }
 
@@ -280,6 +415,23 @@
   }
   const weights = () => entries.filter(e => e.type === 'weight').sort((a, b) => a.t - b.t);
   const prevWeight = e => weights().filter(w => w.t < e.t).pop() || null;
+  // Length is stored in inches; shown as "20.5 in" or "52.1 cm"
+  const CM_PER_IN = 2.54;
+  const lengths = () => entries.filter(e => e.type === 'length').sort((a, b) => a.t - b.t);
+  const prevLength = e => lengths().filter(w => w.t < e.t).pop() || null;
+  const lenUnitPref = () => (prefs.weightUnit === 'kg' ? 'cm' : 'in');
+  function lengthText(inches, unit) {
+    return (unit || lenUnitPref()) === 'cm' ? (inches * CM_PER_IN).toFixed(1) + ' cm' : +inches.toFixed(2) + ' in';
+  }
+  function lengthDelta(d) {
+    if (Math.abs(d) < 0.005) return 'no change';
+    const sign = d > 0 ? '+' : '−', a = Math.abs(d);
+    return sign + (lenUnitPref() === 'cm' ? (a * CM_PER_IN).toFixed(1) + ' cm' : +a.toFixed(2) + ' in');
+  }
+  const HEALTH_ICON = { med: 'med', temp: 'temp', vaccine: 'vaccine', symptom: 'symptom', visit: 'visit' };
+  const tempText = e => (e.tempUnit === 'C' ? ((e.tempF - 32) / 1.8).toFixed(1) + ' °C' : (+e.tempF).toFixed(1) + ' °F');
+  // Growth entries backdated to a day (no time given) are stored at midday and shown by date only
+  const dateOnly = e => (e.type === 'weight' || e.type === 'length') && (() => { const d = new Date(e.t); return d.getHours() === 12 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0; })();
 
   function sideParts(e) {
     return [e.first, other(e.first)].filter(s => sideMin(e, s) > 0)
@@ -318,6 +470,18 @@
       const p = prevWeight(e);
       return { icon: 'weight', cls: 'i-weight', t1: 'Weight', t2: weightText(e.weightOz) + (p ? ' · ' + weightDelta(e.weightOz - p.weightOz) : '') + by };
     }
+    if (e.type === 'length') {
+      const p = prevLength(e);
+      return { icon: 'length', cls: 'i-length', t1: 'Length', t2: lengthText(e.lengthIn) + (p ? ' · ' + lengthDelta(e.lengthIn - p.lengthIn) : '') + by };
+    }
+    if (e.type === 'health') {
+      const icon = HEALTH_ICON[e.kind] || 'health';
+      if (e.kind === 'med') return { icon: icon, cls: 'i-health', t1: e.detail || 'Medicine', t2: 'Medicine' + (e.dose ? ' · ' + e.dose : '') + (e.remindHours ? ' · next due ' + fmtTime(e.t + e.remindHours * 3600000) : '') + by };
+      if (e.kind === 'temp') return { icon: icon, cls: 'i-health', t1: 'Temperature', t2: (e.tempF ? tempText(e) : '') + (e.detail ? ' · ' + e.detail : '') + by };
+      const t1 = { vaccine: 'Vaccine', symptom: 'Symptom', visit: 'Doctor visit' }[e.kind] || 'Health';
+      return { icon: icon, cls: 'i-health', t1: t1, t2: (e.detail || t1) + by };
+    }
+    if (e.type === 'activity') return { icon: 'activity', cls: 'i-activity', t1: e.detail || 'Activity', t2: 'Activity' + (e.minutes ? ' · ' + e.minutes + ' min' : '') + by };
     if (e.type === 'bottle') return { icon: 'bottle', cls: 'i-bottle', t1: 'Bottle', t2: amountText(e) + (e.source ? ' · ' + MILK[e.source] : '') + by };
     return { icon: e.kind, cls: 'i-diaper', t1: kindName[e.kind] + ' diaper', t2: 'Diaper' + by };
   }
@@ -343,6 +507,11 @@
         ? 'Bottle ' + amountText(lastFeed) + (lastFeed.source ? ' ' + MILK[lastFeed.source].toLowerCase() : '') + ' at ' + fmtTime(lastFeed.t)
         : sideParts(lastFeed) + ' at ' + fmtTime(lastFeed.t);
     } else { $('lastFeedAgo').textContent = 'None yet'; $('lastFeedSub').textContent = 'Tap Breastfeed or Bottle to log one'; }
+    // Feed due: no feed for longer than this phone's reminder setting (3 hours unless changed)
+    const dueH = prefs.feedHours != null ? prefs.feedHours : 3;
+    const due = !!(lastFeed && !active && dueH > 0 && Date.now() - lastFeed.t >= dueH * 3600000);
+    $('feedDue').hidden = !due;
+    $('lastFeedAgo').closest('.stat').classList.toggle('due', due);
     const next = lastBreast ? other(lastBreast.last) : null;
     $('nextSide').hidden = !next;
     if (next) $('nextSide').textContent = 'Next: ' + sideName(next) + ' side';
@@ -413,7 +582,8 @@
       b.querySelector('.t2').textContent = d.t2;
       if (e.note) { const n = document.createElement('div'); n.className = 't3'; n.textContent = e.note; b.querySelector('.txt').appendChild(n); }
       const whenEl = b.querySelector('.when');
-      whenEl.textContent = fmtTime(e.t);
+      whenEl.textContent = dateOnly(e) ? new Date(e.t).toLocaleDateString([], { month: 'short', day: 'numeric' }) : fmtTime(e.t);
+      if (e.type === 'activity' && e.minutes) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + e.minutes * MIN); whenEl.appendChild(sm); }
       if (e.type === 'sleep') { const sm = document.createElement('small'); sm.textContent = e.end ? 'to ' + fmtTime(e.end) : 'to now'; whenEl.appendChild(sm); }
       if (e.type === 'pump' && e.minutes) { const sm = document.createElement('small'); sm.textContent = 'to ' + fmtTime(e.t + e.minutes * MIN); whenEl.appendChild(sm); }
       if (e.type === 'breast') {
@@ -437,13 +607,16 @@
         setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
       } else if (openItem === e.id) {
         const tools = document.createElement('div'); tools.className = 'item-tools';
+        const change = document.createElement('button'); change.type = 'button'; change.textContent = 'Edit'; change.className = 'edit-entry';
+        change.style.color = 'var(--feed)';
+        change.addEventListener('click', () => openEdit(Object.assign({}, e)));
         const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = e.note ? 'Edit note' : 'Add note';
         edit.addEventListener('click', () => { editingNote = e.id; render(); });
         const del = document.createElement('button'); del.type = 'button'; del.className = 'del'; del.textContent = 'Delete';
         del.addEventListener('click', () => removeEntry(e.id));
         const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
         cancel.addEventListener('click', () => { openItem = null; render(); });
-        tools.append(edit, del, cancel); wrap.appendChild(tools);
+        tools.append(change, edit, del, cancel); wrap.appendChild(tools);
       }
       tl.appendChild(wrap);
     });
@@ -467,6 +640,7 @@
   /* Sheets                                                            */
   /* ================================================================ */
   let openSheet = null;
+  let editing = null;   // the entry being changed while its sheet is open (null when adding)
   function open(name) {
     closeSheet();
     openSheet = $('sheet-' + name);
@@ -475,32 +649,98 @@
     if (name === 'pump') resetPump();
     if (name === 'sleep') resetSleep();
     if (name === 'weight') resetWeight();
+    if (name === 'health') resetHealth();
+    if (name === 'activity') resetActivity();
     if (name === 'stats') setTimeout(renderStats, 30);
+    if (name === 'sync') renderSyncSheet();
     if (name === 'feed') { resetNote('manual'); resetNote('timer', active && active.note); }
     if (name === 'bottle') { setWhen('bottle', 0); setUnit(prefs.unit); setSource(prefs.source); }
-    if (name === 'feed') { setWhen('manual', 20); renderTimer(); }
+    if (name === 'feed') { setWhenAuto('manual', () => Date.now() - (manual.L + manual.R) * MIN); renderTimer(); }
     if (name === 'settings') renderSettings();
     $('scrim').classList.add('open'); openSheet.classList.add('open');
   }
   function closeSheet() {
     if (openSheet) openSheet.classList.remove('open');
     $('scrim').classList.remove('open'); openSheet = null;
+    if (editing) endEdit();
   }
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => open(b.dataset.open)));
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
   $('scrim').addEventListener('click', closeSheet);
-  $('live').addEventListener('click', () => open('feed'));
+  $('live').addEventListener('click', () => { open('feed'); setMode(true); });
   $('liveSleep').addEventListener('click', () => open('sleep'));
   $('meBtn').addEventListener('click', () => open('settings'));
   $('statsBtn').addEventListener('click', () => open('stats'));
-  $('sync').addEventListener('click', () => { refresh(); toast(online ? 'Checking for new entries' : 'Trying to reconnect'); });
+  $('sync').addEventListener('click', () => { open('sync'); refresh(true); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+
+  /* Editing an entry: its sheet opens filled in, with "Save changes" */
+  const EDIT_TITLES = { breast: 'Edit breastfeed', bottle: 'Edit bottle', diaper: 'Edit diaper', pump: 'Edit pump', sleep: 'Edit sleep',
+    weight: 'Edit weight', length: 'Edit length', health: 'Edit health entry', activity: 'Edit activity' };
+  function markEdit(titleId, saveId, e) {
+    const t = $(titleId), b = $(saveId);
+    if (t.dataset.orig == null) t.dataset.orig = t.textContent;
+    t.textContent = EDIT_TITLES[e.type] || 'Edit';
+    if (b) b.textContent = 'Save changes';
+  }
+  function endEdit() {
+    editing = null;
+    document.querySelectorAll('[data-orig]').forEach(x => { x.textContent = x.dataset.orig; delete x.dataset.orig; });
+    document.querySelectorAll('.edit-hide').forEach(x => { x.hidden = false; x.classList.remove('edit-hide'); });
+    $('slFrom').type = 'time'; $('slTo').type = 'time';
+  }
+  const hideForEdit = el => { if (el && !el.hidden) { el.hidden = true; el.classList.add('edit-hide'); } };
+  const saveLabel = text => (editing ? 'Save changes' : text);
+
+  function openEdit(e) {
+    openItem = null;
+    const name = { breast: 'feed', bottle: 'bottle', diaper: 'diaper', pump: 'pump', sleep: 'sleep', weight: 'weight', length: 'weight', health: 'health', activity: 'activity' }[e.type];
+    if (!name) return;
+    open(name);
+    editing = e;
+    if (e.type === 'breast') {
+      setMode(false); hideForEdit($('feedModes'));
+      manual.first = e.first;
+      document.querySelectorAll('[data-first]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.first === e.first)));
+      setManual('L', e.left || 0); setManual('R', e.right || 0);
+      setWhenExact('manual', e.t); resetNote('manual', e.note);
+      markEdit('feedTitle', 'manualSave', e);
+    } else if (e.type === 'bottle') {
+      setUnit(e.unit); amount = e.amount != null ? e.amount : e.oz; showAmount(); setSource(e.source || null);
+      setWhenExact('bottle', e.t); resetNote('bottle', e.note);
+      markEdit('bottleTitle', 'bottleSave', e);
+    } else if (e.type === 'diaper') {
+      setKind(e.kind); setWhenExact('diaper', e.t); resetNote('diaper', e.note);
+      markEdit('diaperTitle', 'diaperSave', e);
+    } else if (e.type === 'pump') {
+      setPumpSide(e.side); setPumpMin(e.minutes); setPumpUnit(e.pumpUnit);
+      pAmt = { L: e.leftAmt, R: e.rightAmt }; showPA('L'); showPA('R');
+      $('pumpLabel').value = e.label || ''; setWhenExact('pump', e.t); resetNote('pump', e.note);
+      markEdit('pumpTitle', 'pumpSave', e);
+    } else if (e.type === 'sleep') {
+      editSleep(e);
+    } else if (e.type === 'weight' || e.type === 'length') {
+      editGrowth(e);
+    } else if (e.type === 'health') {
+      editHealth(e);
+    } else if (e.type === 'activity') {
+      editActivity(e);
+    }
+  }
 
   /* ================================================================ */
   /* "When" picker                                                     */
   /* ================================================================ */
+  // Chips for "now" and "N minutes ago", or an exact time. When editing an entry it becomes an
+  // exact date and time instead.
   const whenState = {};
+  const whenAuto = {};   // a default that follows the entry, e.g. a feed entered after: now minus its minutes
   const WHEN = [[0, 'Now'], [10, '10m ago'], [20, '20m ago'], [30, '30m ago'], [60, '1h ago']];
+  const pad2 = n => String(n).padStart(2, '0');
+  const timeVal = t => { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+  const dateVal = t => { const d = new Date(t); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+  const dtVal = t => dateVal(t) + 'T' + timeVal(t);
+  const parseDt = v => { const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(v || ''); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]).getTime() : NaN; };
   document.querySelectorAll('.chips.when').forEach(box => {
     const key = box.dataset.for;
     WHEN.forEach(([m, label]) => {
@@ -514,17 +754,41 @@
       const d = new Date(); d.setHours(h, mi, 0, 0);
       if (d.getTime() > Date.now() + MIN) d.setDate(d.getDate() - 1); // a time later than now means last night
       whenState[key] = d.getTime();
+      delete whenAuto[key];
       box.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
     });
     box.appendChild(t);
+    const x = document.createElement('input'); x.type = 'datetime-local'; x.className = 'when-exact'; x.id = 'exact-' + key; x.hidden = true;
+    x.setAttribute('aria-label', 'Date and time');
+    x.addEventListener('change', () => { const v = parseDt(x.value); if (isFinite(v)) whenState[key] = v; });
+    box.appendChild(x);
   });
+  const whenBox = key => document.querySelector('.chips.when[data-for="' + key + '"]');
   function setWhen(key, minsAgo) {
-    const box = document.querySelector('.chips.when[data-for="' + key + '"]');
-    box.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.m) === minsAgo)));
-    const t = box.querySelector('input'); if (t) t.value = '';
-    whenState[key] = minsAgo === 0 ? null : Date.now() - minsAgo * MIN; // "Now" resolves at save time
+    const box = whenBox(key);
+    box.querySelectorAll('.chip').forEach(c => { c.hidden = false; c.setAttribute('aria-pressed', String(Number(c.dataset.m) === minsAgo)); });
+    const t = box.querySelector('input[type="time"]'); t.hidden = false; t.value = '';
+    box.querySelector('.when-exact').hidden = true;
+    delete whenAuto[key];
+    whenState[key] = minsAgo <= 0 ? null : Date.now() - minsAgo * MIN; // "Now" resolves at save time
   }
-  const whenOf = key => whenState[key] || Date.now();
+  function setWhenExact(key, t) {
+    const box = whenBox(key);
+    box.querySelectorAll('.chip, input[type="time"]').forEach(c => { c.hidden = true; });
+    const x = box.querySelector('.when-exact'); x.hidden = false; x.value = dtVal(t); x.max = dtVal(Date.now() + 9 * MIN);
+    delete whenAuto[key];
+    whenState[key] = t;
+  }
+  function setWhenAuto(key, fn) {
+    setWhen(key, -1);
+    whenAuto[key] = fn;
+    showAutoTime(key);
+  }
+  function showAutoTime(key) {
+    if (!whenAuto[key]) return;
+    whenBox(key).querySelector('input[type="time"]').value = timeVal(whenAuto[key]());
+  }
+  const whenOf = key => whenState[key] || (whenAuto[key] ? whenAuto[key]() : Date.now());
 
   /* ================================================================ */
   /* Optional notes on new entries                                     */
@@ -532,7 +796,10 @@
   document.querySelectorAll('.note-wrap').forEach(w => {
     const btn = w.querySelector('.add-note'), ta = w.querySelector('textarea');
     btn.addEventListener('click', () => { btn.hidden = true; ta.hidden = false; ta.focus(); });
-    if (w.dataset.note === 'timer') ta.addEventListener('input', () => { if (active) { active.note = ta.value; saveActive(); } });
+    if (w.dataset.note === 'timer') {
+      ta.addEventListener('input', () => { if (active) { active.note = ta.value; saveActive(); } });
+      ta.addEventListener('change', () => { if (active) queueLive(); });
+    }
   });
   function resetNote(key, value) {
     const w = document.querySelector('.note-wrap[data-note="' + key + '"]');
@@ -542,18 +809,22 @@
   const noteOf = key => $('note-' + key).value.trim();
 
   /* ================================================================ */
-  /* Breastfeed timer                                                  */
+  /* Breastfeed timer, shared by every phone                           */
   /* ================================================================ */
+  // One timer for the household: start it on one phone, switch sides or save it on another.
+  const LONG_MIN = 45;   // a side running this long gets a "still feeding?" check
   function sideMs(a, s) {
     let ms = s === 'L' ? a.left : a.right;
     if (a.running && a.side === s) ms += Date.now() - a.segStart;
     return ms;
   }
+  const isLong = a => !!(a && a.running && Date.now() - a.segStart >= LONG_MIN * MIN);
+  const longKey = a => a.id + ':' + a.segStart;
   function tapSide(s) {
     const now = Date.now();
     const a = active;
     if (!a) {
-      active = { start: now, first: s, side: s, running: true, segStart: now, left: 0, right: 0, note: $('note-timer').value };
+      active = { id: newId(), by: auth ? auth.name : '', start: now, first: s, side: s, running: true, segStart: now, left: 0, right: 0, note: $('note-timer').value };
     } else if (a.side === s && a.running) {
       if (s === 'L') a.left += now - a.segStart; else a.right += now - a.segStart;
       a.running = false;
@@ -562,6 +833,7 @@
       a.side = s; a.running = true; a.segStart = now;
     }
     saveActive(); renderTimer(); renderLive();
+    queueLive();
   }
   $('sideL').addEventListener('click', () => tapSide('L'));
   $('sideR').addEventListener('click', () => tapSide('R'));
@@ -588,6 +860,12 @@
     } else {
       $('feedTotal').textContent = next ? 'Last feed ended on the ' + sideName(other(next)).toLowerCase() + '. Tap a side to start.' : "Tap the side you're starting on";
     }
+    const who = a && a.by && auth && a.by !== auth.name;
+    $('liveWho').hidden = !who;
+    if (who) $('liveWho').textContent = 'Started by ' + a.by + ' on their phone. You can switch sides, pause or save it here.';
+    const showLong = isLong(a) && load(K.LONG, '') !== longKey(a);
+    $('longNote').hidden = !showLong;
+    if (showLong) $('longText').textContent = 'The ' + sideName(a.side).toLowerCase() + ' side has been running ' + durText((Date.now() - a.segStart) / MIN) + '. Still feeding?';
     $('feedDone').disabled = !a;
     $('feedDiscard').hidden = !a;
   }
@@ -595,8 +873,11 @@
     const a = active;
     $('live').hidden = !a;
     if (a) {
-      $('liveTitle').textContent = a.running ? 'Feeding · ' + sideName(a.side) + ' side' : 'Feeding paused';
-      $('liveSub').textContent = 'Left ' + clock(sideMs(a, 'L')) + ' · Right ' + clock(sideMs(a, 'R'));
+      const long = isLong(a);
+      $('live').classList.toggle('warn', long);
+      $('liveTitle').textContent = long ? 'Still feeding? · ' + sideName(a.side) + ' ' + durText((Date.now() - a.segStart) / MIN)
+        : a.running ? 'Feeding · ' + sideName(a.side) + ' side' : 'Feeding paused';
+      $('liveSub').textContent = 'Left ' + clock(sideMs(a, 'L')) + ' · Right ' + clock(sideMs(a, 'R')) + (a.by && auth && a.by !== auth.name ? ' · ' + a.by : '');
     }
     const os = openSleep();
     $('liveSleep').hidden = !os;
@@ -604,6 +885,11 @@
       $('liveSleepTitle').textContent = 'Asleep · ' + longClock(Date.now() - os.t);
       $('liveSleepSub').textContent = 'Since ' + fmtTime(os.t) + (os.by ? ' · started by ' + os.by : '');
     }
+  }
+  // Opening the app with a timer left running for a long time asks once whether it is still going
+  function maybeLongPrompt() {
+    if (!isLong(active) || load(K.LONG, '') === longKey(active) || openSheet) return;
+    open('feed'); setMode(true);
   }
   function longClock(ms) {
     const s = Math.max(0, Math.floor(ms / 1000)), hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60);
@@ -614,14 +900,18 @@
     // A side used for 20 seconds or more counts as at least 1 minute
     const toMin = ms => (ms >= 20000 ? Math.max(1, Math.round(ms / MIN)) : 0);
     const left = toMin(sideMs(a, 'L')), right = toMin(sideMs(a, 'R'));
-    if (!left && !right) { toast('That feed was under 20 seconds, so it was not saved'); active = null; saveActive(); renderTimer(); renderLive(); closeSheet(); return; }
     active = null; saveActive();
+    if (!left && !right) { toast('That feed was under 20 seconds, so it was not saved'); queueLive(); renderTimer(); renderLive(); closeSheet(); return; }
     const first = left && right ? a.first : (left ? 'L' : 'R');
     const last = left && right ? a.side : first;
-    addEntry({ type: 'breast', t: a.start, left: left, right: right, first: first, last: last, note: noteOf('timer') });
+    addEntry({ id: a.id, type: 'breast', t: a.start, left: left, right: right, first: first, last: last, note: noteOf('timer') });
+    queueLive();
     closeSheet();
   });
-  $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); resetNote('timer'); renderTimer(); renderLive(); toast('Feed discarded'); });
+  $('feedDiscard').addEventListener('click', () => { active = null; saveActive(); queueLive(); resetNote('timer'); renderTimer(); renderLive(); toast('Feed discarded'); });
+  $('longKeep').addEventListener('click', () => { if (active) store(K.LONG, longKey(active)); renderTimer(); });
+  $('longSave').addEventListener('click', () => $('feedDone').click());
+  $('longDiscard').addEventListener('click', () => $('feedDiscard').click());
   setInterval(() => {
     if (active || !$('liveSleep').hidden || openSleep()) renderLive();
     if (active && openSheet === $('sheet-feed')) renderTimer();
@@ -648,6 +938,7 @@
     const el = $('m' + s);
     if (document.activeElement !== el) el.value = manual[s];
     el.style.width = Math.max(2, el.value.length) + 1 + 'ch';
+    showAutoTime('manual');
   }
   function setManual(s, v) {
     if (!isFinite(v)) { showManual(s); return; }
@@ -677,7 +968,8 @@
     const only = manual.L ? 'L' : 'R';
     const first = both ? manual.first : only;
     const last = both ? other(manual.first) : only;
-    addEntry({ type: 'breast', t: whenOf('manual'), left: manual.L, right: manual.R, first: first, last: last, note: noteOf('manual') });
+    const e = { type: 'breast', t: whenOf('manual'), left: manual.L, right: manual.R, first: first, last: last, note: noteOf('manual') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();
   });
 
@@ -722,7 +1014,7 @@
     source = src === 'breast' || src === 'formula' ? src : null;
     document.querySelectorAll('[data-source]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.source === source)));
     $('bottleSave').disabled = !source;
-    $('bottleSave').textContent = source ? 'Save bottle' : 'Choose breast milk or formula';
+    $('bottleSave').textContent = source ? saveLabel('Save bottle') : 'Choose breast milk or formula';
   }
   $('unitOz').addEventListener('click', () => setUnit('oz'));
   $('unitMl').addEventListener('click', () => setUnit('ml'));
@@ -764,7 +1056,8 @@
     prefs.amount = Object.assign({}, prefs.amount, { [unit]: amount });
     prefs.source = source; savePrefs();
     const oz = unit === 'ml' ? Math.round(amount / ML_PER_OZ * 100) / 100 : amount;
-    addEntry({ type: 'bottle', t: whenOf('bottle'), amount: amount, unit: unit, oz: oz, source: source, note: noteOf('bottle') });
+    const e = { type: 'bottle', t: whenOf('bottle'), amount: amount, unit: unit, oz: oz, source: source, note: noteOf('bottle') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();
   });
 
@@ -779,7 +1072,7 @@
     pumpSide = sd === 'L' || sd === 'R' || sd === 'B' ? sd : null;
     document.querySelectorAll('[data-pside]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pside === pumpSide)));
     $('pumpSave').disabled = !pumpSide;
-    $('pumpSave').textContent = pumpSide ? 'Save pump' : 'Choose a side';
+    $('pumpSave').textContent = pumpSide ? saveLabel('Save pump') : 'Choose a side';
     ['pAmtTitle', 'pUnitSeg'].forEach(id => { $(id).hidden = !pumpSide; });
     $('pAmtRowL').hidden = !(pumpSide === 'L' || pumpSide === 'B');
     $('pAmtRowR').hidden = !(pumpSide === 'R' || pumpSide === 'B');
@@ -863,15 +1156,14 @@
     prefs.pumpSide = pumpSide; prefs.pumpMin = pumpMin; savePrefs();
     readPumpInputs();
     prefs.pumpUnit = pumpUnit; savePrefs();
-    addEntry({ type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump'),
-      leftAmt: pumpSide !== 'R' ? pAmt.L : null, rightAmt: pumpSide !== 'L' ? pAmt.R : null, pumpUnit: pumpUnit });
+    const e = { type: 'pump', t: whenOf('pump'), side: pumpSide, minutes: pumpMin, label: $('pumpLabel').value.trim().slice(0, 60), note: noteOf('pump'),
+      leftAmt: pumpSide !== 'R' ? pAmt.L : null, rightAmt: pumpSide !== 'L' ? pAmt.R : null, pumpUnit: pumpUnit };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();
   });
 
   /* Sleep: a shared timer (start now, anyone ends it) or start and end entered after */
   let sleepOpenId = null, slFrom = 0, slTo = 0;
-  const pad2 = n => String(n).padStart(2, '0');
-  const timeVal = t => { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
   const dayLabel = t => {
     const d0 = new Date(); d0.setHours(0, 0, 0, 0);
     if (t >= d0.getTime()) return 'Today';
@@ -896,12 +1188,24 @@
     sleepOpenId = os ? os.id : null;
     $('sleepNew').hidden = !!os;
     $('sleepOpen').hidden = !os;
+    $('slTo').closest('.timebox').hidden = false;
     if (os) { setWhen('sleepEnd', 0); renderSleepClock(); return; }
     setSleepMode(true);
     setWhen('sleepStart', 0);
     resetNote('sleep'); resetNote('sleepManual');
     const now = new Date(); now.setSeconds(0, 0);
     slTo = now.getTime(); slFrom = slTo - 60 * MIN;
+    showManualSleep();
+  }
+  // Editing a sleep: exact start and end (date and time), or only the start while still asleep
+  function editSleep(e) {
+    $('sleepNew').hidden = false; $('sleepOpen').hidden = true; sleepOpenId = null;
+    setSleepMode(false); hideForEdit($('slModeTimer').parentNode);
+    $('slFrom').type = 'datetime-local'; $('slTo').type = 'datetime-local';
+    slFrom = e.t; slTo = e.end || null;
+    if (!e.end) hideForEdit($('slTo').closest('.timebox'));
+    resetNote('sleepManual', e.note);
+    markEdit('sleepTitle', 'sleepManualSave', e);
     showManualSleep();
   }
   function renderSleepClock() {
@@ -912,23 +1216,33 @@
     $('slSince').textContent = 'Fell asleep at ' + fmtTime(os.t) + (os.by ? ' · started by ' + os.by : '');
   }
   function showManualSleep() {
-    $('slFrom').value = timeVal(slFrom); $('slTo').value = timeVal(slTo);
-    $('slFromDay').textContent = dayLabel(slFrom); $('slToDay').textContent = dayLabel(slTo);
-    const m = Math.round((slTo - slFrom) / MIN);
+    const exact = $('slFrom').type === 'datetime-local';
+    $('slFrom').value = exact ? dtVal(slFrom) : timeVal(slFrom);
+    $('slFromDay').textContent = exact ? '' : dayLabel(slFrom);
     $('slTotal').textContent = '';
+    if (slTo == null) {
+      $('slTotal').append('Still asleep · ', h('b', { text: durText((Date.now() - slFrom) / MIN) }));
+      $('sleepManualSave').disabled = !(slFrom < Date.now());
+      return;
+    }
+    $('slTo').value = exact ? dtVal(slTo) : timeVal(slTo);
+    $('slToDay').textContent = exact ? '' : dayLabel(slTo);
+    const m = Math.round((slTo - slFrom) / MIN);
     $('slTotal').append('Slept ', h('b', { text: durText(m) }));
-    $('sleepManualSave').disabled = m < 1;
+    $('sleepManualSave').disabled = m < 1 || m > 24 * 60;
   }
   $('slModeTimer').addEventListener('click', () => setSleepMode(true));
   $('slModeManual').addEventListener('click', () => setSleepMode(false));
   $('slTo').addEventListener('change', () => {
     if (!$('slTo').value) return;
+    if ($('slTo').type === 'datetime-local') { const v = parseDt($('slTo').value); if (isFinite(v)) slTo = v; showManualSleep(); return; }
     slTo = placeBefore($('slTo').value, Date.now() + MIN);
     slFrom = placeBefore(timeVal(slFrom), slTo);
     showManualSleep();
   });
   $('slFrom').addEventListener('change', () => {
     if (!$('slFrom').value) return;
+    if ($('slFrom').type === 'datetime-local') { const v = parseDt($('slFrom').value); if (isFinite(v)) slFrom = v; showManualSleep(); return; }
     slFrom = placeBefore($('slFrom').value, slTo);
     showManualSleep();
   });
@@ -937,9 +1251,14 @@
     closeSheet();
   });
   $('sleepManualSave').addEventListener('click', () => {
+    if (editing && slTo == null) {
+      editEntry({ id: editing.id, type: 'sleep', t: slFrom, end: null, minutes: null, note: noteOf('sleepManual') });
+      closeSheet(); return;
+    }
     const m = Math.round((slTo - slFrom) / MIN);
     if (m < 1) return;
-    addEntry({ type: 'sleep', t: slFrom, end: slTo, minutes: m, note: noteOf('sleepManual') });
+    const e = { type: 'sleep', t: slFrom, end: slTo, minutes: m, note: noteOf('sleepManual') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();
   });
   $('sleepEndBtn').addEventListener('click', () => {
@@ -952,40 +1271,77 @@
   });
   $('sleepCancel').addEventListener('click', () => { if (sleepOpenId) removeEntry(sleepOpenId); closeSheet(); });
 
-  /* Weight: pounds and ounces, or kilograms. Stored as ounces. */
-  let wOz = 120;
-  const todayVal = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+  /* Growth: weight (pounds and ounces, or kg; stored as ounces) and length (inches or cm; stored as inches) */
+  let wOz = 120, lenIn = 20, gKind = 'W';
+  const lenUnit = () => (wUnit() === 'kg' ? 'cm' : 'in');
+  const todayVal = () => dateVal(Date.now());
   function setW(oz) {
     if (!isFinite(oz)) return;
     wOz = Math.max(16, Math.min(640, Math.round(oz * 10) / 10));
     showWeight();
   }
+  function setLen(inches) {
+    if (!isFinite(inches)) return;
+    lenIn = Math.max(10, Math.min(45, Math.round(inches * 100) / 100));
+    showWeight();
+  }
   function showWeight() {
-    const [lb, rest] = lbOz(wOz);
-    if (document.activeElement !== $('wLb')) $('wLb').value = lb;
-    if (document.activeElement !== $('wOz')) $('wOz').value = rest;
-    if (document.activeElement !== $('wKg')) $('wKg').value = (wOz / OZ_PER_KG).toFixed(2);
+    const isW = gKind === 'W';
     $('wSame').textContent = '';
-    $('wSame').append('Same as ', h('b', { text: weightText(wOz, wUnit() === 'kg' ? 'lb' : 'kg') }));
-    const last = weights().pop();
+    if (isW) {
+      const [lb, rest] = lbOz(wOz);
+      if (document.activeElement !== $('wLb')) $('wLb').value = lb;
+      if (document.activeElement !== $('wOz')) $('wOz').value = rest;
+      if (document.activeElement !== $('wKg')) $('wKg').value = (wOz / OZ_PER_KG).toFixed(2);
+      $('wSame').append('Same as ', h('b', { text: weightText(wOz, wUnit() === 'kg' ? 'lb' : 'kg') }));
+    } else {
+      if (document.activeElement !== $('lenVal')) $('lenVal').value = lenUnit() === 'cm' ? (lenIn * CM_PER_IN).toFixed(1) : String(+lenIn.toFixed(2));
+      $('lenUnit').textContent = lenUnit();
+      $('wSame').append('Same as ', h('b', { text: lengthText(lenIn, lenUnit() === 'cm' ? 'in' : 'cm') }));
+    }
+    const list = isW ? weights() : lengths();
+    const last = list.filter(x => !editing || x.id !== editing.id).pop();
     $('wPrev').hidden = !last;
-    if (last) $('wPrev').textContent = 'Last weigh-in ' + weightText(last.weightOz) + ' on ' + fmtDay(last.t) + ' · ' + weightDelta(wOz - last.weightOz);
+    if (last) $('wPrev').textContent = (isW ? 'Last weigh-in ' + weightText(last.weightOz) : 'Last length ' + lengthText(last.lengthIn)) +
+      ' on ' + fmtDay(last.t) + ' · ' + (isW ? weightDelta(wOz - last.weightOz) : lengthDelta(lenIn - last.lengthIn));
+  }
+  function setGKind(k) {
+    gKind = k === 'L' ? 'L' : 'W';
+    $('gKindW').setAttribute('aria-pressed', String(gKind === 'W'));
+    $('gKindL').setAttribute('aria-pressed', String(gKind === 'L'));
+    $('wLbPane').hidden = gKind !== 'W' || wUnit() === 'kg';
+    $('wKgPane').hidden = gKind !== 'W' || wUnit() === 'lb';
+    $('gLenPane').hidden = gKind !== 'L';
+    $('weightSave').textContent = saveLabel(gKind === 'W' ? 'Save weight' : 'Save length');
+    showWeight();
   }
   function setWUnit(u) {
     prefs.weightUnit = u === 'kg' ? 'kg' : 'lb'; savePrefs();
     $('wUnitLb').setAttribute('aria-pressed', String(wUnit() === 'lb'));
     $('wUnitKg').setAttribute('aria-pressed', String(wUnit() === 'kg'));
-    $('wLbPane').hidden = wUnit() === 'kg';
-    $('wKgPane').hidden = wUnit() === 'lb';
-    showWeight(); render();
+    setGKind(gKind); render();
   }
   function resetWeight() {
-    const last = weights().pop();
+    const last = weights().pop(), lastL = lengths().pop();
     wOz = last ? last.weightOz : 120;
+    lenIn = lastL ? lastL.lengthIn : 20;
     $('wDate').value = todayVal(); $('wDate').max = todayVal();
     resetNote('weight');
+    gKind = 'W';
     setWUnit(prefs.weightUnit);
   }
+  function editGrowth(e) {
+    hideForEdit($('gKindSeg'));
+    if (e.type === 'weight') wOz = e.weightOz; else lenIn = e.lengthIn;
+    gKind = e.type === 'weight' ? 'W' : 'L';
+    if (e.type === 'length') prefs.weightUnit = e.lengthUnit === 'cm' ? 'kg' : 'lb';   // show it in the unit it was entered in
+    $('wDate').value = dateVal(e.t);
+    resetNote('weight', e.note);
+    markEdit('weightTitle', null, e);
+    setWUnit(prefs.weightUnit);
+  }
+  $('gKindW').addEventListener('click', () => setGKind('W'));
+  $('gKindL').addEventListener('click', () => setGKind('L'));
   $('wUnitLb').addEventListener('click', () => setWUnit('lb'));
   $('wUnitKg').addEventListener('click', () => setWUnit('kg'));
   const kgNow = () => Math.round(wOz / OZ_PER_KG * 100) / 100;
@@ -995,14 +1351,18 @@
   holdRepeat($('wOzPlus'), () => setW(wOz + 0.5));
   holdRepeat($('wKgMinus'), () => setW((kgNow() - 0.01) * OZ_PER_KG));
   holdRepeat($('wKgPlus'), () => setW((kgNow() + 0.01) * OZ_PER_KG));
+  const lenStep = () => (lenUnit() === 'cm' ? 0.5 / CM_PER_IN : 0.25);
+  holdRepeat($('lenMinus'), () => setLen(lenUnit() === 'cm' ? (Math.round(lenIn * CM_PER_IN * 2) / 2 - 0.5) / CM_PER_IN : lenIn - lenStep()));
+  holdRepeat($('lenPlus'), () => setLen(lenUnit() === 'cm' ? (Math.round(lenIn * CM_PER_IN * 2) / 2 + 0.5) / CM_PER_IN : lenIn + lenStep()));
   function readWeightInputs(which) {
     const num = id => { const v = parseFloat($(id).value); return isFinite(v) && v >= 0 ? v : null; };
+    if (which === 'len') { const v = num('lenVal'); if (v != null && v > 0) setLen(lenUnit() === 'cm' ? v / CM_PER_IN : v); return; }
     if (which === 'kg') { const k = num('wKg'); if (k != null && k > 0) setW(k * OZ_PER_KG); return; }
     const lb = num('wLb'), oz = num('wOz');
     const [curLb, curOz] = lbOz(wOz);
     setW((lb != null ? Math.floor(lb) : curLb) * 16 + (oz != null ? oz : curOz));
   }
-  [['wLb', 'lb'], ['wOz', 'lb'], ['wKg', 'kg']].forEach(([id, which]) => {
+  [['wLb', 'lb'], ['wOz', 'lb'], ['wKg', 'kg'], ['lenVal', 'len']].forEach(([id, which]) => {
     const inp = $(id);
     inp.addEventListener('input', () => { inp.value = inp.value.replace(',', '.').replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'); });
     inp.addEventListener('focus', () => setTimeout(() => inp.select(), 0));
@@ -1011,31 +1371,176 @@
   });
   $('weightSave').addEventListener('click', () => {
     const f = document.activeElement;
-    if (f && /^w(Lb|Oz|Kg)$/.test(f.id)) readWeightInputs(f.id === 'wKg' ? 'kg' : 'lb');
+    if (f && /^(w(Lb|Oz|Kg)|lenVal)$/.test(f.id)) readWeightInputs(f.id === 'wKg' ? 'kg' : f.id === 'lenVal' ? 'len' : 'lb');
     const day = $('wDate').value || todayVal();
     let t = Date.now();
-    if (day !== todayVal()) {
+    if (editing && day === dateVal(editing.t)) t = editing.t;          // same day: keep its time
+    else if (day !== todayVal()) {
       const [y, mo, d] = day.split('-').map(Number);
       t = new Date(y, mo - 1, d, 12, 0, 0, 0).getTime();   // a past day without a time: use midday
       if (t > Date.now()) { toast('That date is in the future'); return; }
       if (t < Date.now() - 365 * 86400000) { toast('Pick a date within the last year'); return; }
     }
-    addEntry({ type: 'weight', t: t, weightOz: wOz, note: noteOf('weight') });
+    const e = gKind === 'W' ? { type: 'weight', t: t, weightOz: wOz, note: noteOf('weight') }
+      : { type: 'length', t: t, lengthIn: lenIn, lengthUnit: lenUnit(), note: noteOf('weight') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
+    closeSheet();
+  });
+
+  /* Health: medicine (with an optional reminder), temperature, vaccine, symptom, doctor visit */
+  const H = {
+    med: { label: 'Medicine', save: 'Save medicine', placeholder: 'For example: Vitamin D', chips: ['Vitamin D'], need: true },
+    temp: { label: '', save: 'Save temperature', placeholder: 'Optional, or pick one above', chips: ['Rectal', 'Armpit', 'Forehead', 'Ear'], need: false },
+    vaccine: { label: 'Vaccine', save: 'Save vaccine', placeholder: 'Which vaccine', chips: ['Hepatitis B', 'RSV antibody', 'DTaP', 'Hib', 'Polio (IPV)', 'Pneumococcal (PCV)', 'Rotavirus', 'Flu', 'COVID-19'], need: true },
+    symptom: { label: 'Symptom', save: 'Save symptom', placeholder: 'What you noticed', chips: ['Congestion', 'Cough', 'Fever', 'Rash', 'Spit-up', 'Vomiting', 'Diarrhea', 'Fussy', 'Jaundice'], need: true },
+    visit: { label: 'Doctor visit (who or why)', save: 'Save visit', placeholder: 'Optional, for example: 2 week checkup', chips: ['Checkup', 'Sick visit', 'Lactation consultant', 'Urgent care'], need: false }
+  };
+  const REMIND = [0, 4, 6, 8, 12, 24];
+  let hKind = 'med', tempF = 98.6, tUnit = 'F', hRemind = 0;
+  const cToF = c => c * 1.8 + 32, fToC = f => (f - 32) / 1.8;
+  function setHKind(k) {
+    hKind = H[k] ? k : 'med';
+    const cfg = H[hKind];
+    document.querySelectorAll('[data-hkind]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hkind === hKind)));
+    $('hTempPane').hidden = hKind !== 'temp';
+    $('hMedPane').hidden = hKind !== 'med';
+    $('hDetailLabel').hidden = !cfg.label; $('hDetailLabel').textContent = cfg.label;
+    $('hDetail').placeholder = cfg.placeholder;
+    // Medicine suggestions: what was given before, most recent first, then Vitamin D
+    const used = hKind === 'med' ? entries.filter(e => e.type === 'health' && e.kind === 'med').sort((a, b) => b.t - a.t).map(e => e.detail) : [];
+    const chips = Array.from(new Set(used.concat(cfg.chips))).slice(0, 8);
+    const box = $('hChips'); box.textContent = '';
+    chips.forEach(c => box.appendChild(h('button', { class: 'chip', type: 'button', text: c, 'aria-pressed': 'false', onclick: () => {
+      $('hDetail').value = c; showHealth();
+      if (hKind === 'med') {   // the same medicine's last reminder setting
+        const prev = entries.filter(e => e.type === 'health' && e.kind === 'med' && e.detail.toLowerCase() === c.toLowerCase()).sort((a, b) => b.t - a.t)[0];
+        if (prev) { setRemind(prev.remindHours || 0); if (!$('hDose').value) $('hDose').value = prev.dose || ''; }
+      }
+    } })));
+    showHealth();
+  }
+  function setRemind(hrs) {
+    hRemind = hrs;
+    document.querySelectorAll('#hRemind .chip').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.h) === hrs)));
+  }
+  REMIND.forEach(r => $('hRemind').appendChild(h('button', { class: 'chip', type: 'button', 'data-h': String(r), text: r ? 'Every ' + r + 'h' : 'Off', onclick: () => setRemind(r) })));
+  function showTemp() {
+    const el = $('tVal');
+    if (document.activeElement !== el) el.value = (tUnit === 'C' ? fToC(tempF) : tempF).toFixed(1);
+    $('tUnitLbl').textContent = '°' + tUnit;
+    $('tUnitF').setAttribute('aria-pressed', String(tUnit === 'F'));
+    $('tUnitC').setAttribute('aria-pressed', String(tUnit === 'C'));
+  }
+  function setTempF(f) { if (!isFinite(f)) return; tempF = Math.max(90, Math.min(110, Math.round(f * 10) / 10)); showTemp(); }
+  function showHealth() {
+    const v = $('hDetail').value.trim();
+    document.querySelectorAll('#hChips .chip').forEach(c => c.setAttribute('aria-pressed', String(c.textContent === v)));
+    const ok = !H[hKind].need || !!v;
+    $('healthSave').disabled = !ok;
+    $('healthSave').textContent = editing ? 'Save changes' : ok ? H[hKind].save : 'Enter the ' + H[hKind].label.toLowerCase();
+  }
+  function resetHealth() {
+    tUnit = prefs.tempUnit === 'C' ? 'C' : 'F';
+    tempF = 98.6; showTemp();
+    $('hDetail').value = ''; $('hDose').value = '';
+    setRemind(0);
+    setWhen('health', 0); resetNote('health');
+    setHKind('med');
+  }
+  function editHealth(e) {
+    $('hDetail').value = e.detail || ''; $('hDose').value = e.dose || '';
+    if (e.kind === 'temp' && e.tempF) { tempF = e.tempF; tUnit = e.tempUnit === 'C' ? 'C' : 'F'; showTemp(); }
+    setRemind(e.remindHours || 0);
+    setWhenExact('health', e.t); resetNote('health', e.note);
+    markEdit('healthTitle', null, e);
+    setHKind(e.kind);
+  }
+  document.querySelectorAll('[data-hkind]').forEach(b => b.addEventListener('click', () => { $('hDetail').value = ''; setHKind(b.dataset.hkind); }));
+  $('hDetail').addEventListener('input', showHealth);
+  $('tUnitF').addEventListener('click', () => { tUnit = 'F'; prefs.tempUnit = 'F'; savePrefs(); showTemp(); });
+  $('tUnitC').addEventListener('click', () => { tUnit = 'C'; prefs.tempUnit = 'C'; savePrefs(); showTemp(); });
+  holdRepeat($('tMinus'), () => setTempF(tUnit === 'C' ? cToF(Math.round(fToC(tempF) * 10) / 10 - 0.1) : tempF - 0.1));
+  holdRepeat($('tPlus'), () => setTempF(tUnit === 'C' ? cToF(Math.round(fToC(tempF) * 10) / 10 + 0.1) : tempF + 0.1));
+  const readTemp = () => { const v = parseFloat($('tVal').value); if (isFinite(v)) setTempF(tUnit === 'C' ? cToF(v) : v); else showTemp(); };
+  $('tVal').addEventListener('input', () => { $('tVal').value = $('tVal').value.replace(',', '.').replace(/[^0-9.]/g, ''); });
+  $('tVal').addEventListener('focus', () => setTimeout(() => $('tVal').select(), 0));
+  $('tVal').addEventListener('blur', readTemp);
+  $('tVal').addEventListener('keydown', e => { if (e.key === 'Enter') $('tVal').blur(); });
+  $('healthSave').addEventListener('click', () => {
+    if (document.activeElement === $('tVal')) readTemp();
+    const detail = $('hDetail').value.trim().slice(0, 60);
+    if (H[hKind].need && !detail) return;
+    const e = { type: 'health', kind: hKind, t: whenOf('health'), detail: detail, note: noteOf('health') };
+    if (hKind === 'med') { e.dose = $('hDose').value.trim().slice(0, 40); e.remindHours = hRemind; }
+    if (hKind === 'temp') { e.tempF = tempF; e.tempUnit = tUnit; }
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
+    closeSheet();
+  });
+
+  /* Activity: tummy time, bath, walks and anything typed in, with optional minutes */
+  const ACTIVITIES = ['Tummy time', 'Bath', 'Walk', 'Skin to skin', 'Reading', 'Play'];
+  let aMin = 0;
+  function showActivity() {
+    const v = $('aDetail').value.trim();
+    document.querySelectorAll('#aChips .chip').forEach(c => c.setAttribute('aria-pressed', String(c.textContent === v)));
+    const el = $('aMin');
+    if (document.activeElement !== el) el.value = aMin;
+    el.style.width = Math.max(2, el.value.length) + 0.4 + 'ch';
+    document.querySelectorAll('#aMinChips .chip').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.m) === aMin)));
+    $('activitySave').disabled = !v;
+    $('activitySave').textContent = editing ? 'Save changes' : v ? 'Save ' + v.toLowerCase() : 'Choose an activity';
+  }
+  function setAMin(v) { if (!isFinite(v)) return; aMin = Math.max(0, Math.min(240, Math.round(v))); showActivity(); }
+  function resetActivity() {
+    const used = entries.filter(e => e.type === 'activity').sort((a, b) => b.t - a.t).map(e => e.detail);
+    const names = Array.from(new Set(ACTIVITIES.concat(used))).slice(0, 10);
+    const box = $('aChips'); box.textContent = '';
+    names.forEach(n => box.appendChild(h('button', { class: 'chip', type: 'button', text: n, 'aria-pressed': 'false', onclick: () => {
+      $('aDetail').value = n;
+      if (!aMin) { const prev = entries.filter(e => e.type === 'activity' && e.detail === n && e.minutes).sort((a, b) => b.t - a.t)[0]; if (prev) aMin = prev.minutes; }
+      showActivity();
+    } })));
+    $('aDetail').value = ''; aMin = 0;
+    setWhen('activity', 0); resetNote('activity');
+    showActivity();
+  }
+  function editActivity(e) {
+    $('aDetail').value = e.detail || ''; aMin = e.minutes || 0;
+    setWhenExact('activity', e.t); resetNote('activity', e.note);
+    markEdit('activityTitle', null, e);
+    showActivity();
+  }
+  [5, 10, 15, 20, 30].forEach(m => $('aMinChips').appendChild(h('button', { class: 'chip', type: 'button', 'data-m': String(m), text: m + ' min', onclick: () => setAMin(m) })));
+  holdRepeat($('aMinus'), () => setAMin(aMin - 1));
+  holdRepeat($('aPlus'), () => setAMin(aMin + 1));
+  $('aDetail').addEventListener('input', showActivity);
+  $('aMin').addEventListener('input', () => { $('aMin').value = $('aMin').value.replace(/[^0-9]/g, '').slice(0, 3); });
+  $('aMin').addEventListener('focus', () => setTimeout(() => $('aMin').select(), 0));
+  $('aMin').addEventListener('blur', () => setAMin(parseInt($('aMin').value || '0', 10)));
+  $('aMin').addEventListener('keydown', e => { if (e.key === 'Enter') $('aMin').blur(); });
+  $('activitySave').addEventListener('click', () => {
+    if (document.activeElement === $('aMin')) setAMin(parseInt($('aMin').value || '0', 10));
+    const detail = $('aDetail').value.trim().slice(0, 40);
+    if (!detail) return;
+    const e = { type: 'activity', t: whenOf('activity'), detail: detail, minutes: aMin, note: noteOf('activity') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
     closeSheet();
   });
 
   /* Diaper */
   let kind = null;
-  function resetDiaper() {
-    kind = null; $('diaperSave').disabled = true;
-    document.querySelectorAll('[data-kind]').forEach(k => k.setAttribute('aria-pressed', 'false'));
-    setWhen('diaper', 0);
+  function setKind(k) {
+    kind = k; $('diaperSave').disabled = !k;
+    document.querySelectorAll('[data-kind]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.kind === k)));
   }
-  document.querySelectorAll('[data-kind]').forEach(k => k.addEventListener('click', () => {
-    kind = k.dataset.kind; $('diaperSave').disabled = false;
-    document.querySelectorAll('[data-kind]').forEach(x => x.setAttribute('aria-pressed', String(x === k)));
-  }));
-  $('diaperSave').addEventListener('click', () => { if (!kind) return; addEntry({ type: 'diaper', t: whenOf('diaper'), kind: kind, note: noteOf('diaper') }); closeSheet(); });
+  function resetDiaper() { setKind(null); setWhen('diaper', 0); }
+  document.querySelectorAll('[data-kind]').forEach(k => k.addEventListener('click', () => setKind(k.dataset.kind)));
+  $('diaperSave').addEventListener('click', () => {
+    if (!kind) return;
+    const e = { type: 'diaper', t: whenOf('diaper'), kind: kind, note: noteOf('diaper') };
+    if (editing) editEntry(Object.assign({ id: editing.id }, e)); else addEntry(e);
+    closeSheet();
+  });
 
   /* ================================================================ */
   /* Small DOM helper                                                  */
@@ -1081,6 +1586,8 @@
       body.appendChild(people);
       loadPeople(people);
     }
+
+    body.appendChild(notifySection());
 
     if (!isStandalone()) {
       body.appendChild(h('button', { class: 'secondary', type: 'button', text: 'Add Baby Log to your Home Screen', onclick: () => openInstall(false) }));
@@ -1192,6 +1699,138 @@
       box, actions,
       h('button', { class: 'ghost', type: 'button', text: 'Done', onclick: () => renderSettings() })
     );
+  }
+
+  /* ================================================================ */
+  /* Notifications (reminders)                                         */
+  /* ================================================================ */
+  // Each phone chooses its own reminders. The sheet checks every 5 minutes and the Baby Log
+  // cloud service delivers them, so they arrive even when the app is closed.
+  const b64ToBytes = s => {
+    const raw = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  };
+  function notifySection() {
+    const box = h('div', { class: 'pane', style: 'gap:12px' }, [h('div', { class: 'field-label', text: 'Notifications' })]);
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    if (!supported) {
+      box.appendChild(h('p', { class: 'muted', style: 'margin:0', text: isIOS && !isStandalone()
+        ? 'On iPhone, notifications work in the Home Screen app. Add Baby Log to your Home Screen, open it from there, then turn them on here.'
+        : 'This browser cannot show notifications.' }));
+      return box;
+    }
+    const status = h('p', { class: 'muted', style: 'margin:0', text: 'Checking...' });
+    box.appendChild(status);
+    loadNotify(box, status);
+    return box;
+  }
+  async function loadNotify(box, status) {
+    let st;
+    try { st = await api('pushStatus'); } catch (e) {
+      status.textContent = e.code === 'offline' ? 'Connect to the internet to change notifications.' : e.message; return;
+    }
+    if (!st.configured) { status.textContent = 'Reminders are not set up for this Baby Log yet. The person who set it up can turn them on (README, Reminders).'; return; }
+    // The background helper (service worker) receives notifications; it starts with the app
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 5000, null))]);
+    if (!reg) { status.textContent = "Notifications need the app's background helper, which did not start. Close Baby Log, open it again and try here."; return; }
+    status.remove();
+    let sub = await reg.pushManager.getSubscription();
+    const p = Object.assign({ feedHours: 3, longFeed: true, meds: true }, st.sub || {});
+    const sw = h('input', { type: 'checkbox', id: 'notifyOn' });
+    sw.checked = !!(st.sub && sub && Notification.permission === 'granted');
+    const opts = h('div', { class: 'pane', style: 'gap:10px' });
+    opts.hidden = !sw.checked;
+    const feedChips = h('div', { class: 'chips pick', role: 'group', 'aria-label': 'Feed due after' });
+    const paint = () => feedChips.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(Number(c.dataset.v) === p.feedHours)));
+    [0, 2, 2.5, 3, 4].forEach(v => feedChips.appendChild(h('button', { class: 'chip', type: 'button', 'data-v': String(v), text: v ? v + 'h' : 'Off',
+      onclick: () => { p.feedHours = v; paint(); save(); } })));
+    paint();
+    const long = h('input', { type: 'checkbox', id: 'nLong' }); long.checked = !!p.longFeed;
+    const meds = h('input', { type: 'checkbox', id: 'nMeds' }); meds.checked = !!p.meds;
+    long.addEventListener('change', () => { p.longFeed = long.checked; save(); });
+    meds.addEventListener('change', () => { p.meds = meds.checked; save(); });
+    const test = h('button', { class: 'secondary', type: 'button', text: 'Send a test notification', onclick: async () => {
+      try { await api('pushTest'); toast('Sent. It should appear in a few seconds.'); } catch (e) { toast(e.message); }
+    } });
+    opts.append(h('p', { class: 'muted', style: 'margin:0', text: 'Feed due when there has been no feed for:' }), feedChips,
+      h('label', { class: 'switch', for: 'nLong' }, ['Breastfeed timer running over ' + LONG_MIN + ' minutes', long]),
+      h('label', { class: 'switch', for: 'nMeds' }, ['Medicine due (set when logging a dose)', meds]), test);
+    box.append(h('label', { class: 'switch', for: 'notifyOn' }, ['Notifications on this phone', sw]), opts);
+
+    async function save() {
+      prefs.feedHours = p.feedHours; savePrefs(); render();
+      if (!sw.checked) return;
+      try {
+        sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(st.publicKey) });
+        await api('pushSubscribe', { subscription: sub.toJSON(), prefs: p });
+      } catch (e) { toast("Couldn't save: " + e.message); }
+    }
+    sw.addEventListener('change', async () => {
+      if (sw.checked) {
+        try {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { sw.checked = false; toast('Notifications are blocked. Allow them for Baby Log in this phone\'s settings.'); return; }
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(st.publicKey) });
+          await api('pushSubscribe', { subscription: sub.toJSON(), prefs: p });
+          opts.hidden = false; prefs.feedHours = p.feedHours; savePrefs(); render();
+          toast('Notifications are on');
+        } catch (e) { sw.checked = false; toast("Couldn't turn on notifications: " + e.message); }
+      } else {
+        try { await api('pushUnsubscribe'); } catch (e) { /* turned off on this phone anyway */ }
+        try { if (sub) await sub.unsubscribe(); } catch (e) { /* ignore */ }
+        sub = null; opts.hidden = true; toast('Notifications are off');
+      }
+    });
+  }
+
+  /* ================================================================ */
+  /* Sync details: what is waiting and why                             */
+  /* ================================================================ */
+  function opLabel(o) {
+    const e = o.entry || entries.find(x => x.id === o.id);
+    const what = e ? describe(e).t1 + ' at ' + fmtTime(e.t) : 'An entry';
+    if (o.op === 'add') return 'New: ' + what;
+    if (o.op === 'edit') return 'Changes to ' + what.toLowerCase();
+    if (o.op === 'delete') return 'Delete an entry';
+    if (o.op === 'note') return 'Note on ' + what.toLowerCase();
+    if (o.op === 'endSleep') return o.reopen ? 'Sleep going again' : 'Wake-up time';
+    if (o.op === 'live') return o.state ? 'Breastfeed timer' : 'Breastfeed timer ended';
+    return 'Change';
+  }
+  function renderSyncSheet() {
+    const body = $('syncBody');
+    body.textContent = '';
+    const when = lastSync ? 'Last checked with the sheet ' + ago(lastSync).toLowerCase() + '.' : 'Not checked with the sheet yet.';
+    body.appendChild(h('p', { class: 'muted', style: 'margin:0', text: (online ? '' : 'Offline. ') + when }));
+    if (!outbox.length) {
+      body.appendChild(h('div', { class: 'notice', text: 'Everything logged on this phone is saved to the sheet.' }));
+    } else {
+      const list = h('div', { class: 'list' });
+      outbox.forEach(o => {
+        const status = o === inflight ? 'Sending now' : o.tries
+          ? 'Tried ' + o.tries + (o.tries === 1 ? ' time' : ' times') + ': ' + (o.lastError || 'no answer') + (o.nextTry ? '. Trying again at ' + fmtTime(o.nextTry) + '.' : '')
+          : online ? 'Waiting to send' : 'Waiting for a connection';
+        const row = h('div', { class: 'q-item' }, [h('b', { text: opLabel(o) }), h('span', { class: o.tries ? 'err' : 'muted', text: status })]);
+        if (o !== inflight) {
+          row.appendChild(h('div', { class: 'chips' }, [
+            h('button', { class: 'btn-sm', type: 'button', text: 'Try now', onclick: () => { o.nextTry = 0; saveOutbox(); flush(); } }),
+            h('button', { class: 'btn-sm del', type: 'button', text: 'Discard', onclick: () => discardOp(o) })
+          ]));
+        }
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+      body.appendChild(h('p', { class: 'muted', style: 'margin:0', text: 'Discard removes a change that will not go through. The sheet keeps whatever it already has.' }));
+    }
+    body.appendChild(h('button', { class: 'secondary', type: 'button', text: 'Check for new entries', onclick: () => { refresh(true); toast('Checking for new entries'); } }));
+  }
+  function discardOp(o) {
+    const k = outbox.indexOf(o);
+    if (k === -1 || o === inflight) return;
+    outbox.splice(k, 1);
+    if (o.op === 'add') entries = entries.filter(x => x.id !== o.entry.id);
+    touch(); saveAll();
+    refresh(true);   // anything else comes back as the sheet has it
   }
 
   /* ================================================================ */
@@ -1324,7 +1963,8 @@
 
   function lockedOut(byChoice) {
     auth = null; entries = []; outbox = []; active = null;
-    [K.AUTH, K.ENTRIES, K.OUTBOX, K.ACTIVE].forEach(drop);
+    syncedAt = 0;
+    [K.AUTH, K.ENTRIES, K.OUTBOX, K.ACTIVE, K.SYNC].forEach(drop);
     showJoin(byChoice ? 'welcome' : 'removed');
   }
 
@@ -1332,8 +1972,10 @@
     $('screen-join').hidden = true;
     $('screen-home').hidden = false;
     setMode(true);
+    // A feed timer started on this phone before timers were shared: share it instead of losing it
+    if (active && !active.id) { active.id = newId(); active.by = auth.name; saveActive(); queueLive(true); }
     render(); setSync();
-    refresh();
+    refresh(true).then(maybeLongPrompt);
   }
 
   /* ================================================================ */
@@ -1347,7 +1989,7 @@
 
   function dailyStats(range) {
     const today = dayStart(Date.now());
-    const logged = entries.filter(e => e.type !== 'weight');   // weigh-ins can be backdated to birth
+    const logged = entries.filter(e => e.type !== 'weight' && e.type !== 'length');   // growth entries can be backdated to birth
     const first = logged.length ? dayStart(Math.min.apply(null, logged.map(e => e.t))) : today;
     const days = [];
     for (let i = range - 1; i >= 0; i--) {
@@ -1472,27 +2114,26 @@
     });
   }
 
-  // Weight: every weigh-in as a line over real time (not tied to the 7/14/30 day range)
-  let weightSel = null;
-  function renderWeightChart(color) {
-    const svg = $('chWeight'), ws = weights();
-    const kg = wUnit() === 'kg';
-    svg.parentNode.querySelector('.st-sub').textContent = 'Every weigh-in, in ' + (kg ? 'kg' : 'lb');
+  // Growth: every weigh-in (or length) as a line over real time (not tied to the 7/14/30 day range)
+  const growthSel = {};
+  function renderGrowthChart(c) {
+    const svg = $(c.svg), ws = c.list();
+    svg.parentNode.querySelector('.st-sub').textContent = c.sub;
     if (!ws.length) {
-      svg.hidden = true; $('stWeightHead').textContent = '';
-      $('stWeightDetail').textContent = 'No weigh-ins yet. Tap Weight on the home screen to add one, including the birth weight.';
+      svg.hidden = true; $(c.head).textContent = '';
+      $(c.detail).textContent = c.empty;
       return;
     }
     svg.hidden = false;
-    if (!ws.some(w => w.id === weightSel)) weightSel = ws[ws.length - 1].id;
-    const val = oz => (kg ? oz / OZ_PER_KG : oz / 16);
+    let sel = growthSel[c.svg];
+    if (!ws.some(w => w.id === sel)) sel = growthSel[c.svg] = ws[ws.length - 1].id;
+    const val = w => c.val(c.raw(w));
     const W = Math.max(260, svg.clientWidth || svg.parentNode.clientWidth || 300), H = 150;
     const padL = 34, padR = 14, padT = 22, padB = 22;
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); svg.textContent = '';
-    const vs = ws.map(w => val(w.weightOz));
+    const vs = ws.map(val);
     let lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
-    const minSpan = kg ? 0.2 : 0.5;
-    if (hi - lo < minSpan) { const mid = (hi + lo) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
+    if (hi - lo < c.minSpan) { const mid = (hi + lo) / 2; lo = mid - c.minSpan / 2; hi = mid + c.minSpan / 2; }
     const step = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10].find(st => (Math.ceil(hi / st) - Math.floor(lo / st)) <= 4) || 10;
     lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
     const t0 = ws[0].t, t1 = ws[ws.length - 1].t;
@@ -1504,33 +2145,45 @@
       const t = el('text', { x: padL - 6, y: y(v) + 4, 'text-anchor': 'end' }, svg);
       t.textContent = +v.toFixed(2);
     }
-    if (ws.length > 1) el('path', { d: ws.map((w, i) => (i ? 'L' : 'M') + x(w.t) + ',' + y(val(w.weightOz))).join(''), fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+    if (ws.length > 1) el('path', { d: ws.map((w, i) => (i ? 'L' : 'M') + x(w.t) + ',' + y(val(w))).join(''), fill: 'none', stroke: c.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
     const xl = (t, anchor, px) => { const tx = el('text', { x: px, y: H - 6, 'text-anchor': anchor }, svg); tx.textContent = mdDay(t); };
     if (ws.length > 1) { xl(t0, 'start', padL); xl(t1, 'end', W - padR); } else xl(t0, 'middle', x(t0));
-    ws.forEach((w, i) => {
-      const cx = x(w.t), cy = y(val(w.weightOz)), selected = w.id === weightSel;
-      el('circle', { cx: cx, cy: cy, r: selected ? 5.5 : 3.5, fill: color, stroke: 'var(--surface)', 'stroke-width': selected ? 2 : 1.5 }, svg);
+    ws.forEach(w => {
+      const cx = x(w.t), cy = y(val(w)), selected = w.id === sel;
+      el('circle', { cx: cx, cy: cy, r: selected ? 5.5 : 3.5, fill: c.color, stroke: 'var(--surface)', 'stroke-width': selected ? 2 : 1.5 }, svg);
       if (selected) {
         const anchor = cx < padL + 40 ? 'start' : cx > W - padR - 40 ? 'end' : 'middle';
         const t = el('text', { class: 'val halo', x: cx, y: cy - 10, 'text-anchor': anchor }, svg);
-        t.textContent = weightText(w.weightOz);
+        t.textContent = c.text(c.raw(w));
       }
       const hit = el('rect', { class: 'hit', x: cx - 16, y: 0, width: 32, height: H }, svg);
-      hit.addEventListener('click', () => { weightSel = w.id; renderWeightChart(color); });
-      const tip = el('title', {}, hit); tip.textContent = longDay(w.t) + ': ' + weightText(w.weightOz);
+      hit.addEventListener('click', () => { growthSel[c.svg] = w.id; renderGrowthChart(c); });
+      const tip = el('title', {}, hit); tip.textContent = longDay(w.t) + ': ' + c.text(c.raw(w));
     });
     const last = ws[ws.length - 1], first = ws[0];
-    $('stWeightHead').textContent = ws.length > 1 ? weightDelta(last.weightOz - first.weightOz) + ' since ' + mdDay(first.t) : '';
-    const i = ws.findIndex(w => w.id === weightSel), w = ws[i], p = ws[i - 1];
+    $(c.head).textContent = ws.length > 1 ? c.delta(c.raw(last) - c.raw(first)) + ' since ' + mdDay(first.t) : '';
+    const i = ws.findIndex(w => w.id === sel), w = ws[i], p = ws[i - 1];
     let rest = '';
     if (p) {
       const days = (w.t - p.t) / DAY;
-      const perDay = (w.weightOz - p.weightOz) / Math.max(days, 1);
-      const rate = days >= 1 && Math.abs(perDay) >= 0.05 ? ', about ' + weightDelta(perDay).replace(/^\+/, '') + ' a day' : '';
-      rest = '(' + weightDelta(w.weightOz - p.weightOz) + ' since ' + mdDay(p.t) + rate + ')';
+      const perDay = (c.raw(w) - c.raw(p)) / Math.max(days, 1);
+      const rate = c.rate && days >= 1 && Math.abs(perDay) >= c.rate ? ', about ' + c.delta(perDay).replace(/^\+/, '') + ' a day' : '';
+      rest = '(' + c.delta(c.raw(w) - c.raw(p)) + ' since ' + mdDay(p.t) + rate + ')';
     }
-    const b = $('stWeightDetail'); b.textContent = longDay(w.t) + ': ' + weightText(w.weightOz) + ' ';
+    const b = $(c.detail); b.textContent = longDay(w.t) + ': ' + c.text(c.raw(w)) + ' ';
     if (rest) b.appendChild(h('span', { text: rest }));
+  }
+  function renderGrowth(color) {
+    const kg = wUnit() === 'kg';
+    renderGrowthChart({ svg: 'chWeight', head: 'stWeightHead', detail: 'stWeightDetail', list: weights, raw: w => w.weightOz,
+      val: oz => (kg ? oz / OZ_PER_KG : oz / 16), text: oz => weightText(oz), delta: weightDelta, rate: 0.05, minSpan: kg ? 0.2 : 0.5,
+      color: color, sub: 'Every weigh-in, in ' + (kg ? 'kg' : 'lb'),
+      empty: 'No weigh-ins yet. Tap Growth on the home screen to add one, including the birth weight.' });
+    const cm = lenUnitPref() === 'cm';
+    renderGrowthChart({ svg: 'chLength', head: 'stLengthHead', detail: 'stLengthDetail', list: lengths, raw: w => w.lengthIn,
+      val: inches => (cm ? inches * CM_PER_IN : inches), text: inches => lengthText(inches), delta: lengthDelta, rate: 0, minSpan: cm ? 2 : 1,
+      color: color, sub: 'Every measurement, in ' + (cm ? 'cm' : 'inches'),
+      empty: 'No lengths yet. Tap Growth, then Length, to add one.' });
   }
 
   function renderStats() {
@@ -1586,7 +2239,7 @@
     if (sel.sleepMin > 0) setDetail('stSleepDetail', when + ': ' + durText(sel.sleepMin) + ' asleep',
       '(' + sel.sleeps + ' sleep' + (sel.sleeps === 1 ? '' : 's') + ' started' + (sel.sleeps ? ', longest ' + durText(sel.longest) : '') + ')');
     else setDetail('stSleepDetail', when + ': no sleep logged', '');
-    renderWeightChart(C('--c-weight'));
+    renderGrowth(C('--c-weight'));
 
     const rows = days.slice().reverse().filter(d => !d.before);
     const table = h('table', {}, [
@@ -1616,6 +2269,11 @@
 
   setInterval(() => { if (auth && document.visibilityState === 'visible') refresh(); }, 45000);
   setInterval(render, 30000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && auth) refresh().then(maybeLongPrompt); });
+  // Opened from a notification: show what it was about
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => {
+    if (!auth || !ev.data || ev.data.type !== 'notification') return;
+    refresh(true).then(() => { if (ev.data.tag === 'long' && active) { open('feed'); setMode(true); } });
+  });
   window.addEventListener('online', () => { online = true; refresh(); });
 })();

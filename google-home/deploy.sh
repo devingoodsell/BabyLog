@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploys the Baby Log Google Home service to Cloud Run in your current Google Cloud project.
+# Deploys the Baby Log cloud service (Google Home voice commands and reminder notifications)
+# to Cloud Run in your current Google Cloud project.
 # Run it in Google Cloud Shell:
 #   git clone https://github.com/devingoodsell/BabyLog && cd BabyLog/google-home && ./deploy.sh
 #
@@ -23,6 +24,11 @@ API="$(sed -n "s/.*apiUrl: *'\([^']*\)'.*/\1/p" ../config.js)"
 [ -n "$API" ] || fail "config.js has no apiUrl. Set up the Baby Log sheet and app first (see README)."
 
 rand_hex() { python3 -c 'import secrets,sys; print(secrets.token_hex(int(sys.argv[1])))' "$1"; }
+# A VAPID key pair for Web Push (reminders). Prints "public private", both base64url.
+vapid_keys() { node -e '
+const c = require("crypto"); const { publicKey, privateKey } = c.generateKeyPairSync("ec", { namedCurve: "P-256" });
+const j = privateKey.export({ format: "jwk" }); const b = s => Buffer.from(s, "base64url");
+console.log(Buffer.concat([Buffer.from([4]), b(j.x), b(j.y)]).toString("base64url") + " " + j.d);'; }
 rand_code() { python3 -c 'import secrets; a="ABCDEFGHJKMNPQRSTVWXYZ23456789"; c="".join(secrets.choice(a) for _ in range(8)); print(c[:4]+"-"+c[4:])'; }
 
 get_key() {
@@ -44,7 +50,19 @@ CLIENT_SECRET='$CLIENT_SECRET'
 SIGNING_KEY='$SIGNING_KEY'
 LINK_PASSCODE='$LINK_PASSCODE'
 BABYLOG_TOKEN='$BABYLOG_TOKEN'
+PUSH_SECRET='${PUSH_SECRET:-}'
+VAPID_PUBLIC='${VAPID_PUBLIC:-}'
+VAPID_PRIVATE='${VAPID_PRIVATE:-}'
 EOF
+}
+# Reminder keys: made once and kept, so phones that turned on notifications keep working
+add_push_keys() {
+  if [ -z "${VAPID_PUBLIC:-}" ] || [ -z "${PUSH_SECRET:-}" ]; then
+    read -r VAPID_PUBLIC VAPID_PRIVATE < <(vapid_keys)
+    PUSH_SECRET="$(rand_hex 32)"
+    save_secrets
+    echo "Created reminder keys and saved them to $SECRETS."
+  fi
 }
 
 if [ -f "$SECRETS" ]; then
@@ -56,6 +74,7 @@ if [ -f "$SECRETS" ]; then
     get_key
     save_secrets
   fi
+  add_push_keys
 else
   bold "First-time setup"
   get_key
@@ -63,6 +82,7 @@ else
   CLIENT_SECRET="$(rand_hex 24)"
   SIGNING_KEY="$(rand_hex 32)"
   LINK_PASSCODE="$(rand_code)"
+  add_push_keys
   save_secrets
   echo "Saved settings to $SECRETS (only readable by you)."
 fi
@@ -92,6 +112,9 @@ SIGNING_KEY: '$SIGNING_KEY'
 LINK_PASSCODE: '$LINK_PASSCODE'
 BABYLOG_API: '$API'
 BABYLOG_TOKEN: '$BABYLOG_TOKEN'
+PUSH_SECRET: '$PUSH_SECRET'
+VAPID_PUBLIC: '$VAPID_PUBLIC'
+VAPID_PRIVATE: '$VAPID_PRIVATE'
 EOF
 
 bold "Building and deploying (takes 2 to 4 minutes the first time)"
@@ -101,6 +124,16 @@ gcloud run deploy "$SERVICE" --source . --region "$REGION" \
 
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format 'value(status.url)')"
 curl -sSf --max-time 30 "$URL/" >/dev/null || fail "Deployed, but $URL/ is not answering. See Troubleshooting in the README."
+
+bold "Linking reminders to your Baby Log sheet"
+LINKED="$(curl -sSL --max-time 60 -H 'Content-Type: text/plain' \
+  --data "{\"action\":\"linkPush\",\"token\":\"$BABYLOG_TOKEN\",\"url\":\"$URL\",\"secret\":\"$PUSH_SECRET\",\"publicKey\":\"$VAPID_PUBLIC\"}" "$API" || true)"
+if printf '%s' "$LINKED" | grep -q '"linked":true'; then
+  echo "Reminders linked. If you have not yet, run setupReminders once in the Apps Script editor (see the README)."
+else
+  echo "Could not link reminders yet: $LINKED"
+  echo "Update the Apps Script to the latest Code.gs, publish a new version, then run ./deploy.sh again."
+fi
 
 bold "Done. Enter these in the Google Home Developer Console, under Account linking and Cloud fulfillment:"
 cat <<EOF
