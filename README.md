@@ -12,7 +12,7 @@ A phone app for logging a newborn's feeds, diapers, sleep, growth and health, sh
 - **Growth:** weight (pounds and ounces, or kilograms) and length (inches or cm). Measurements can be backdated up to a year, so birth weight and length can go in too.
 - **Health:** medicine and doses (with an optional "remind me when the next dose is due"), temperature (°F or °C), vaccines, symptoms and doctor visits.
 - **Activities:** tummy time, bath, walks or anything you type, with optional minutes.
-- **Edit anything:** tap an entry to change its time, amounts, sides or details, or to delete it. Undo is offered after every change.
+- **Edit anything:** tap an entry to change its time, amounts, sides or details, or to delete it. Undo is offered after every change (or **Keep separate**, when a breastfeed was added to the one before it).
 - **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus weight and length charts of every measurement with the change between them.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
@@ -187,6 +187,8 @@ Google Home can't write to a sheet by itself, so this adds a small private servi
   → your Cloud Run service (google-home/server.js) → the same Apps Script the app uses
   → new row in the Diapers tab, shown in the app as logged by "Google Home"
 ```
+
+If two speakers both hear the same command, it is logged once: the script keeps one of two identical voice entries made within a minute of each other.
 
 It runs within Cloud Run's free tier. You need a Google Cloud project with billing enabled (free-tier use isn't charged), about 45 minutes, and the app already working.
 
