@@ -58,12 +58,17 @@ let fails = 0; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m
       check((await P.$$('#chOz path')).length === 6, 'bottle chart stacks breast milk and formula (6 segments, got ' + (await P.$$('#chOz path')).length + ')');
       check(await P.isHidden('#lgMilkOther') && (await P.textContent('#stOzTitle')).includes('by milk'), 'no "Not recorded" legend when every bottle has its milk');
       check((await P.textContent('#stBmAvg')) === ' · avg 0.5 oz/day' && (await P.textContent('#stFmAvg')) === ' · avg 1 oz/day', 'daily averages next to each: ' + await P.textContent('#stBmAvg') + ' / ' + await P.textContent('#stFmAvg'));
+      const segF = await P.$$eval('#chFeeds text.seg-val', x => x.map(e => e.textContent));
+      const segO = await P.$$eval('#chOz text.seg-val', x => x.map(e => e.textContent));
+      check(segF.filter(v => v === '7' || v === '8').length === 7, 'each breastfeed part is labeled with its count: ' + segF.join(' '));
+      check(segO.length === 6 && segO.every(v => v === '1.5'), 'each breast milk and formula part is labeled with its ounces: ' + segO.join(' '));
       await P.evaluate(() => document.getElementById('chOz').scrollIntoView({ block: 'center' }));
       await P.screenshot({ path: OUT + '/18-stats-milk.png' });
       await P.click('#rng14');
       check((await P.$$('#chWet rect.hit')).length === 14, '14-day range shows 14 days');
       await P.click('#rng30');
       check((await P.$$('#chWet rect.hit')).length === 30, '30-day range shows 30 days');
+      check((await P.$$('#chFeeds text.seg-val')).length === 0, 'at 30 days the bars are too narrow for part labels, so none are drawn');
       const xl = await P.$$eval('#chWet text', t => t.map(x => x.textContent));
       check(xl.includes('Today') && xl.length < 15, '30-day axis labels are spaced out: ' + xl.slice(3).join(' '));
       await P.evaluate(() => document.querySelector('#sheet-stats').scrollTop = 900);

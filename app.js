@@ -2164,6 +2164,12 @@
           const gap = base > 0 ? 2 : 0;   // 2px surface gap between stacked segments
           const p = el('path', { d: barPath(x, y1, bw, y0 - y1 - gap, j === topIdx), fill: series[j].color }, svg);
           if (d.isToday) p.setAttribute('opacity', '0.55');
+          // Stacked bars: each part's own number inside it, when the part is tall and wide enough to hold it
+          const txt = String(+v.toFixed(1));
+          if (series.length > 1 && bw >= 12 && y0 - y1 - gap >= 11 && txt.length * 6 <= bw + 1) {
+            const t = el('text', { class: 'seg-val' + (d.isToday ? ' today' : ''), x: x + bw / 2, y: y1 + (y0 - y1 - gap) / 2 + 3.5, 'text-anchor': 'middle' }, svg);
+            t.textContent = txt;
+          }
           base += v;
         });
         if (i === selIdx) {

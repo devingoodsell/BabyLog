@@ -114,6 +114,8 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .st-chart { width: 100%; display: block; touch-action: pan-y; }
 .st-chart text { font-family: var(--font); font-size: 11px; font-weight: 700; fill: var(--muted); }
 .st-chart .val { fill: var(--ink); font-size: 12px; font-weight: 800; }
+.st-chart .seg-val { fill: var(--on-accent); font-size: 10px; font-weight: 800; pointer-events: none; }
+.st-chart .seg-val.today { fill: var(--ink); }
 .st-chart .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
 .st-chart .grid { stroke: var(--line); stroke-width: 1; }
 .st-chart .hit { fill: transparent; cursor: pointer; }
