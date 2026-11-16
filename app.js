@@ -2062,7 +2062,7 @@
     for (let i = range - 1; i >= 0; i--) {
       const start = addDays(today, -i);
       days.push({ start: start, end: addDays(start, 1), isToday: i === 0, before: start < first,
-        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, breastMin: 0, pumps: 0, longestGap: 0, sleepMin: 0, sleeps: 0, longest: 0 });
+        wet: 0, dirty: 0, breast: 0, bottles: 0, oz: 0, ozBreast: 0, ozFormula: 0, ozOther: 0, breastMin: 0, pumps: 0, longestGap: 0, sleepMin: 0, sleeps: 0, longest: 0 });
     }
     const now = Date.now();
     entries.forEach(e => {
@@ -2079,7 +2079,12 @@
       if (!d) return;
       if (e.type === 'diaper') { if (e.kind !== 'dirty') d.wet++; if (e.kind !== 'wet') d.dirty++; }
       else if (e.type === 'breast') { d.breast++; d.breastMin += (e.left || 0) + (e.right || 0); }
-      else if (e.type === 'bottle') { d.bottles++; d.oz += e.oz || 0; }
+      else if (e.type === 'bottle') {
+        d.bottles++; d.oz += e.oz || 0;
+        if (e.source === 'breast') d.ozBreast += e.oz || 0;
+        else if (e.source === 'formula') d.ozFormula += e.oz || 0;
+        else d.ozOther += e.oz || 0;   // bottles logged before the milk choice existed
+      }
       else if (e.type === 'pump') d.pumps++;
     });
     // Longest stretch without milk removal (breastfeed or pump), from the end of one to the start of the
@@ -2274,12 +2279,19 @@
     $('stIntakeAvg').textContent = aFeeds == null ? '' : 'avg ' + fmtAvg(aFeeds) + ' feeds/day';
     $('stWetAvg').textContent = aWet == null ? '' : 'avg ' + fmtAvg(aWet) + '/day';
     $('stDirtyAvg').textContent = aDirty == null ? '' : 'avg ' + fmtAvg(aDirty) + '/day';
-    $('stOzTitle').textContent = 'Bottle ' + volUnit() + ' per day';
+    $('stOzTitle').textContent = 'Bottle ' + volUnit() + ' per day, by milk';
 
     const css = getComputedStyle(document.documentElement);
     const C = k => css.getPropertyValue(k).trim();
     drawBars($('chFeeds'), days, [{ color: C('--c-breast'), get: d => d.breast }, { color: C('--c-bottle'), get: d => d.bottles }], 140, d => String(d.breast + d.bottles), false);
-    drawBars($('chOz'), days, [{ color: C('--c-bottle'), get: d => volOf(d.oz) }], 110, d => String(volOf(d.oz)), true);
+    // Breast milk and formula stacked; bottles with no milk recorded (older entries) in gray on top
+    const shown = days.filter(d => !d.before);
+    $('lgMilkOther').hidden = !shown.some(d => d.ozOther > 0);
+    drawBars($('chOz'), days, [{ color: C('--c-breast'), get: d => volOf(d.ozBreast) }, { color: C('--c-bottle'), get: d => volOf(d.ozFormula) },
+      { color: C('--c-other'), get: d => volOf(d.ozOther) }], 130, d => String(volOf(d.oz)), true);
+    const aBm = avg(d => d.ozBreast), aFm = avg(d => d.ozFormula);
+    $('stBmAvg').textContent = aBm == null ? '' : ' · avg ' + volOf(aBm) + ' ' + volUnit() + '/day';
+    $('stFmAvg').textContent = aFm == null ? '' : ' · avg ' + volOf(aFm) + ' ' + volUnit() + '/day';
     drawBars($('chRemoval'), days, [{ color: C('--c-breast'), get: d => d.breast }, { color: C('--c-pump'), get: d => d.pumps }], 130, d => String(d.breast + d.pumps), true);
     const aRem = avg(d => d.breast + d.pumps);
     $('stRemAvg').textContent = aRem == null ? '' : 'avg ' + fmtAvg(aRem) + '/day';
@@ -2297,7 +2309,8 @@
     const feeds = sel.breast + sel.bottles;
     setDetail('stIntakeDetail', when + ': ' + feeds + ' feed' + (feeds === 1 ? '' : 's'),
       '(' + sel.breast + ' breastfeed' + (sel.breast === 1 ? '' : 's') + ', ' + sel.breastMin + ' min · ' +
-      sel.bottles + ' bottle' + (sel.bottles === 1 ? '' : 's') + ', ' + volOf(sel.oz) + ' ' + volUnit() + ')');
+      sel.bottles + ' bottle' + (sel.bottles === 1 ? '' : 's') + ', ' + volOf(sel.oz) + ' ' + volUnit() +
+      (sel.oz ? ': ' + volOf(sel.ozBreast) + ' breast milk, ' + volOf(sel.ozFormula) + ' formula' + (sel.ozOther ? ', ' + volOf(sel.ozOther) + ' not recorded' : '') : '') + ')');
     const rem = sel.breast + sel.pumps, plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
     setDetail('stRemDetail', when + ': ' + rem + (rem === 1 ? ' time' : ' times'),
       '(' + plural(sel.breast, 'breastfeed') + ', ' + plural(sel.pumps, 'pump') + (sel.longestGap ? ' · longest stretch between ' + durText(sel.longestGap) : '') + ')');
@@ -2310,8 +2323,8 @@
 
     const rows = days.slice().reverse().filter(d => !d.before);
     const table = h('table', {}, [
-      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Milk removal', 'Wet', 'Dirty', 'Sleep'].map(t => h('th', { text: t })))]),
-      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), d.breast + d.pumps, d.wet, d.dirty, d.sleepMin ? durText(d.sleepMin) : '–']
+      h('thead', {}, [h('tr', {}, ['Day', 'Feeds', 'Breast min', 'Bottle ' + volUnit(), 'Breast milk', 'Formula', 'Milk removal', 'Wet', 'Dirty', 'Sleep'].map(t => h('th', { text: t })))]),
+      h('tbody', {}, rows.map(d => h('tr', {}, [d.isToday ? 'Today' : longDay(d.start), d.breast + d.bottles, d.breastMin, volOf(d.oz), volOf(d.ozBreast), volOf(d.ozFormula), d.breast + d.pumps, d.wet, d.dirty, d.sleepMin ? durText(d.sleepMin) : '–']
         .map(v => h('td', { text: String(v) })))))
     ]);
     $('stTable').textContent = ''; $('stTable').appendChild(table);

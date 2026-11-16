@@ -13,7 +13,7 @@ A phone app for logging a newborn's feeds, diapers, sleep, growth and health, sh
 - **Health:** medicine and doses (with an optional "remind me when the next dose is due"), temperature (°F or °C), vaccines, symptoms and doctor visits.
 - **Activities:** tummy time, bath, walks or anything you type, with optional minutes.
 - **Edit anything:** tap an entry to change its time, amounts, sides or details, or to delete it. Undo is offered after every change (or **Keep separate**, when a breastfeed was added to the one before it).
-- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus weight and length charts of every measurement with the change between them.
+- **Stats:** daily averages and per-day charts for feeds (breastfeeds and bottles), bottle amount split into breast milk and formula, milk removal (breastfeeds plus pumps, with the longest stretch between them), wet and dirty diapers and hours asleep over the last 7, 14 or 30 days, with a table view, plus weight and length charts of every measurement with the change between them.
 - **Notes** on any entry, when you log it or later from the timeline.
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Reminders (optional):** notifications when a feed is due, when the breastfeed timer has run too long, or when the next dose of a medicine is due. Each person picks their own.

@@ -49,6 +49,7 @@
   --c-breast: #4F74DB;
   --c-bottle: #00897A;
   --c-diaper: #B87A0F;
+  --c-other: #8A919E;
   --ok: #2E9D5B;
   --warn: #C98A1E;
   --danger: #C2413A;
@@ -65,7 +66,7 @@
   :root {
     --bg: #0D1220; --surface: #161C2B; --ink: #E4E8F1; --muted: #8C95A8; --line: #252D3F;
     --feed: #8DA5F0; --feed-soft: #1E2843; --bottle: #5DBFB2; --bottle-soft: #15302E;
-    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --health: #6FCF8E; --health-soft: #183022; --activity: #F0A065; --activity-soft: #3A2516; --c-sleep: #9085E9; --c-pump: #D25FC0; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
+    --diaper: #E2B15E; --diaper-soft: #33291A; --pump: #BFA0F2; --pump-soft: #2B2142; --sleep: #9AA8C7; --sleep-soft: #1E2433; --weight: #EE8FB0; --weight-soft: #3A1E2A; --health: #6FCF8E; --health-soft: #183022; --activity: #F0A065; --activity-soft: #3A2516; --c-sleep: #9085E9; --c-pump: #D25FC0; --c-weight: #D55181; --c-breast: #728BE3; --c-bottle: #1C9F87; --c-diaper: #E2B15E; --c-other: #6B7385; --ok: #5CC98A; --warn: #E2B15E; --danger: #EE7B73; --danger-soft: #3A1E1E;
     --on-accent: #0D1220; --scrim: rgba(0, 0, 0, .6); --shadow: none; color-scheme: dark;
   }
 }
@@ -121,6 +122,7 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .st-detail span { color: var(--muted); font-weight: 600; }
 .st-empty { color: var(--muted); font-weight: 600; font-size: 14px; padding: 8px 2px; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 2px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.legend em { font-style: normal; font-weight: 600; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .st-table { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
 .st-table table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -766,8 +768,9 @@ input[type="time"] { font: inherit; font-weight: 700; border: 1px solid var(--li
     <div class="legend"><span><i style="background:var(--c-breast)"></i>Breastfeeds</span><span><i style="background:var(--c-bottle)"></i>Bottles</span></div>
     <div class="st-sub">Feeds per day</div>
     <svg class="st-chart" id="chFeeds" role="img" aria-label="Feeds per day"></svg>
-    <div class="st-sub" id="stOzTitle">Bottle oz per day</div>
-    <svg class="st-chart" id="chOz" role="img" aria-label="Bottle amount per day"></svg>
+    <div class="st-sub" id="stOzTitle">Bottle oz per day, by milk</div>
+    <div class="legend"><span><i style="background:var(--c-breast)"></i>Breast milk<em id="stBmAvg"></em></span><span><i style="background:var(--c-bottle)"></i>Formula<em id="stFmAvg"></em></span><span id="lgMilkOther"><i style="background:var(--c-other)"></i>Not recorded</span></div>
+    <svg class="st-chart" id="chOz" role="img" aria-label="Bottle amount per day, breast milk and formula"></svg>
     <div class="st-detail" id="stIntakeDetail"></div>
   </div>
   <div class="st-card">

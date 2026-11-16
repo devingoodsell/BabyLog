@@ -26,7 +26,7 @@ let fails = 0; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m
         for (let i = 0; i < 6 + k % 3; i++) await add({ type: 'diaper', kind: i === 0 ? 'both' : 'wet', t: t - i * 60000 });
         for (let i = 0; i < 1 + k % 2; i++) await add({ type: 'diaper', kind: 'dirty', t: t - 100 * 60000 - i * 60000 });
         for (let i = 0; i < 7 + k % 2; i++) await add({ type: 'breast', left: 10, right: 8, first: 'L', last: 'R', t: t - 200 * 60000 - i * 60000 });
-        for (let i = 0; i < k % 3; i++) await add({ type: 'bottle', oz: 1.5, amount: 1.5, unit: 'oz', source: 'formula', t: t - 300 * 60000 - i * 60000 });
+        for (let i = 0; i < k % 3; i++) await add({ type: 'bottle', oz: 1.5, amount: 1.5, unit: 'oz', source: i === 1 ? 'breast' : 'formula', t: t - 300 * 60000 - i * 60000 });
       }
       await ctx.storageState({ path: require('os').tmpdir() + '/babylog-state-' + process.env.PORT + '.json' });
       await P.reload();
@@ -54,7 +54,12 @@ let fails = 0; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m
       await hits[hits.length - 3].click();
       await P.waitForTimeout(200);
       check((await P.textContent('#stWetDetail')).includes(': ' + (6 + 2 % 3) + ' wet'), 'tapping a day updates details: ' + await P.textContent('#stWetDetail'));
-      check((await P.textContent('#stIntakeDetail')).includes('2 bottles, 3 oz'), 'intake detail for that day: ' + await P.textContent('#stIntakeDetail'));
+      check((await P.textContent('#stIntakeDetail')).includes('2 bottles, 3 oz: 1.5 breast milk, 1.5 formula'), 'intake detail for that day splits breast milk and formula: ' + await P.textContent('#stIntakeDetail'));
+      check((await P.$$('#chOz path')).length === 6, 'bottle chart stacks breast milk and formula (6 segments, got ' + (await P.$$('#chOz path')).length + ')');
+      check(await P.isHidden('#lgMilkOther') && (await P.textContent('#stOzTitle')).includes('by milk'), 'no "Not recorded" legend when every bottle has its milk');
+      check((await P.textContent('#stBmAvg')) === ' · avg 0.5 oz/day' && (await P.textContent('#stFmAvg')) === ' · avg 1 oz/day', 'daily averages next to each: ' + await P.textContent('#stBmAvg') + ' / ' + await P.textContent('#stFmAvg'));
+      await P.evaluate(() => document.getElementById('chOz').scrollIntoView({ block: 'center' }));
+      await P.screenshot({ path: OUT + '/18-stats-milk.png' });
       await P.click('#rng14');
       check((await P.$$('#chWet rect.hit')).length === 14, '14-day range shows 14 days');
       await P.click('#rng30');
@@ -70,6 +75,8 @@ let fails = 0; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m
       await P.click('summary');
       await P.waitForTimeout(200);
       check((await P.$$('#stTable tbody tr')).length === 7, 'table has 7 rows');
+      const th = await P.$$eval('#stTable th', x => x.map(e => e.textContent));
+      check(th.includes('Breast milk') && th.includes('Formula'), 'table has breast milk and formula columns');
       await P.screenshot({ path: OUT + '/15-stats-bottom.png' });
       const overflow = await P.evaluate(() => document.querySelector('#sheet-stats').scrollWidth > document.querySelector('#sheet-stats').clientWidth);
       check(!overflow, 'no sideways scrolling in the stats sheet');
