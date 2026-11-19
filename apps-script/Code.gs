@@ -73,6 +73,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  resetRequest_();
   let res;
   try {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
@@ -95,8 +96,8 @@ function handle_(req) {
     case 'list': return Object.assign({ me: publicMe_(dev) }, list_(req.since));
     case 'add': return withLock_(() => add_(dev, req.entry));
     case 'edit': return withLock_(() => edit_(dev, req.entry));
-    case 'delete': return withLock_(() => remove_(req.id));
-    case 'update': return withLock_(() => updateNote_(req.id, req.note));
+    case 'delete': return withLock_(() => remove_(req.id, req.type));
+    case 'update': return withLock_(() => updateNote_(req.id, req.note, req.type));
     case 'endSleep': return withLock_(() => endSleep_(req.id, req.end, !!req.reopen));
     case 'live': return withLock_(() => setLive_(dev, req.state, req.replace));
     case 'pushStatus': return pushStatus_(dev);
@@ -117,9 +118,16 @@ function handle_(req) {
 /* Auth                                                                */
 /* ================================================================== */
 
+// A phone's key is checked against the Devices tab, then remembered for a few minutes so most
+// requests skip reading that tab. Removing a phone in the app takes effect at once; changing its
+// Status by hand in the sheet takes effect within AUTH_CACHE_SEC.
+const AUTH_CACHE_SEC = 300;
 function auth_(token) {
   if (!token || typeof token !== 'string' || token.length < 40) throw fail_('unauthorized', 'This phone does not have access.');
   const h = hash_(token);
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('dev:' + h);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* read the sheet instead */ } }
   const sh = sheet_(DEVICES);
   const rows = data_(sh);
   for (let i = 0; i < rows.length; i++) {
@@ -128,7 +136,9 @@ function auth_(token) {
     if (r[D.STATUS] !== 'Active') break;
     const used = r[D.USED] instanceof Date ? r[D.USED].getTime() : 0;
     if (Date.now() - used > 10 * 60000) sh.getRange(i + 2, D.USED + 1).setValue(new Date());
-    return { row: i + 2, name: String(r[D.NAME]), role: String(r[D.ROLE]), id: String(r[D.ID]) };
+    const dev = { name: String(r[D.NAME]), role: String(r[D.ROLE]), id: String(r[D.ID]) };
+    cache.put('dev:' + h, JSON.stringify(dev), AUTH_CACHE_SEC);
+    return dev;
   }
   throw fail_('unauthorized', 'This phone no longer has access.');
 }
@@ -281,8 +291,11 @@ function revoke_(dev, deviceId, inviteId) {
 function setDeviceStatus_(deviceId, status) {
   const sh = sheet_(DEVICES);
   const rows = data_(sh);
+  const cache = CacheService.getScriptCache();
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][D.ID]) === deviceId) sh.getRange(i + 2, D.STATUS + 1).setValue(status);
+    if (String(rows[i][D.ID]) !== deviceId) continue;
+    sh.getRange(i + 2, D.STATUS + 1).setValue(status);
+    cache.remove('dev:' + rows[i][D.HASH]);   // takes effect on that phone's next request
   }
   return {};
 }
@@ -302,6 +315,7 @@ function add_(dev, e) {
   rec['Logged by'] = dev.name;
   rec['Logged at'] = new Date();
   appendRec_(t, rec);
+  touchTab_(t.key);
   entry.by = dev.name;
   endLiveIf_(entry.id);
   return { entry: entry };
@@ -325,7 +339,9 @@ function edit_(dev, e) {
     rec['Logged by'] = by;
     rec['Logged at'] = at;
     appendRec_(openTab_(key), rec);
+    touchTab_(key);
   }
+  touchTab_(f.key);
   entry.by = String(by || '');
   endLiveIf_(entry.id);   // a feed continued on the shared timer and saved
   return { entry: entry };
@@ -588,7 +604,12 @@ function list_(since) {
     out.delta = true;
     out.deleted = (getProp_('deleted') || []).filter(d => d.at >= after).map(d => d.id);
   }
+  // A tab the script has not changed since this phone last asked is not read at all, so a poll
+  // when nothing happened costs almost nothing. (Hand edits show up on the 10-minute full sync.)
+  const revs = getProp_('revs');
+  const unchanged = key => !!(since && revs && revs._start && after >= revs._start && (revs[key] || 0) < after);
   TAB_KEYS.forEach(key => {
+    if (unchanged(key)) return;
     const t = readTab_(key);
     const T = t.c.Time, U = t.c['Updated at'];
     t.rows.forEach((r, i) => {
@@ -612,9 +633,9 @@ function list_(since) {
   return out;
 }
 
-function remove_(id) {
-  const f = findEntry_(id);
-  if (f) f.sh.deleteRow(f.row);
+function remove_(id, type) {
+  const f = findEntry_(id, tabHint_(type));
+  if (f) { f.sh.deleteRow(f.row); touchTab_(f.key); }
   // Remember recent deletions so phones that sync only changes hear about them. Phones also
   // download everything at least every 10 minutes, so two days (or the last 100) is plenty, and
   // keeps this under the 9 KB a script property can hold.
@@ -627,12 +648,13 @@ function remove_(id) {
   return {};
 }
 
-function updateNote_(id, note) {
-  const f = findEntry_(id);
+function updateNote_(id, note, type) {
+  const f = findEntry_(id, tabHint_(type));
   if (!f) throw fail_('bad_request', 'That entry no longer exists.');
   const clean = cleanNote_(note);
   f.sh.getRange(f.row, f.c.Notes + 1).setValue(safeCell_(clean));
   f.sh.getRange(f.row, f.c['Updated at'] + 1).setValue(new Date());
+  touchTab_(f.key);
   return { id: String(id), note: clean };
 }
 
@@ -655,6 +677,7 @@ function endSleep_(id, end, reopen) {
   if (reopen) {
     set('Woke up', '');
     set('Updated at', new Date());
+    touchTab_('sleep');
     return { id: String(id), end: null, minutes: null };
   }
   const woke = f.values[f.c['Woke up']];
@@ -664,6 +687,7 @@ function endSleep_(id, end, reopen) {
   const s = sleepEnd_(start, Number(end));
   set('Woke up', new Date(s.end));
   set('Updated at', new Date());
+  touchTab_('sleep');
   return { id: String(id), end: s.end, minutes: s.minutes };
 }
 
@@ -672,8 +696,7 @@ function endSleep_(id, end, reopen) {
 // A tab's sheet and where each of its columns is. A column the script needs but the tab lacks
 // (after an update adds one, say) is added at the end.
 function openTab_(key) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(TABS[key].name);
-  if (!sh) throw notSetUp_();
+  const sh = tabSheet_(key);
   const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => String(h).trim());
   while (head.length && !head[head.length - 1]) head.pop();
   headersOf_(key).forEach(h => {
@@ -687,19 +710,46 @@ function openTab_(key) {
   return { key: key, sh: sh, head: head, c: c };
 }
 
-// The tab plus all of its rows (without the header)
+// The tab plus all of its rows (without the header), read in one call
 function readTab_(key) {
-  const t = openTab_(key);
-  const last = t.sh.getLastRow();
-  t.rows = last < 2 ? [] : t.sh.getRange(2, 1, last - 1, t.head.length).getValues();
-  return t;
+  const sh = tabSheet_(key);
+  const all = sh.getDataRange().getValues();
+  const head = (all[0] || []).map(h => String(h).trim());
+  while (head.length && !head[head.length - 1]) head.pop();
+  if (headersOf_(key).some(h => head.indexOf(h) === -1)) {   // a column is missing: add it, then read again
+    const t = openTab_(key);
+    const last = t.sh.getLastRow();
+    t.rows = last < 2 ? [] : t.sh.getRange(2, 1, last - 1, t.head.length).getValues();
+    return t;
+  }
+  const c = {};
+  head.forEach((h, i) => { if (h && !(h in c)) c[h] = i; });
+  return { key: key, sh: sh, head: head, c: c, rows: all.length > 1 ? all.slice(1) : [] };
+}
+
+// When each tab was last changed through the script (see list_)
+function touchTab_(key) {
+  const r = getProp_('revs') || {};
+  r[key] = Date.now();
+  if (!r._start) r._start = Date.now();
+  setProp_('revs', r);
+}
+
+const tabHint_ = type => (type ? tabOf_(String(type)) : null);
+let TAB_SHEETS_ = {};   // this request's sheets, looked up once each
+function resetRequest_() { PROPS_ = null; TAB_SHEETS_ = {}; }
+function tabSheet_(key) {
+  const name = TABS[key] ? TABS[key].name : '';
+  if (!TAB_SHEETS_[name]) TAB_SHEETS_[name] = SpreadsheetApp.getActive().getSheetByName(name);
+  if (!TAB_SHEETS_[name]) throw notSetUp_();
+  return TAB_SHEETS_[name];
 }
 
 // Finds an entry's row by its ID, looking in tab `first` before the others
 function findEntry_(id, first) {
   id = String(id || '');
   if (!id) return null;
-  const keys = first ? [first].concat(TAB_KEYS.filter(k => k !== first)) : TAB_KEYS;
+  const keys = first && TABS[first] ? [first].concat(TAB_KEYS.filter(k => k !== first)) : TAB_KEYS;
   for (let k = 0; k < keys.length; k++) {
     const t = openTab_(keys[k]);
     const last = t.sh.getLastRow();
@@ -729,11 +779,11 @@ function rowFrom_(t, rec, base) {
 
 // Adds a row. Rows stay in time order: one logged late or backdated is moved into place.
 function appendRec_(t, rec) {
-  const last = t.sh.getLastRow();
+  const last = t.rows ? t.rows.length + 1 : t.sh.getLastRow();
   if (t.sh.getMaxRows() <= last) t.sh.insertRowsAfter(t.sh.getMaxRows(), 100);
   writeRow_(t, last + 1, rowFrom_(t, rec, null));
   if (last >= 2) {
-    const prev = t.sh.getRange(last, t.c.Time + 1).getValue();
+    const prev = t.rows ? t.rows[t.rows.length - 1][t.c.Time] : t.sh.getRange(last, t.c.Time + 1).getValue();
     if (prev instanceof Date && prev.getTime() > rec.Time.getTime()) sortTab_(t);
   }
 }
@@ -800,8 +850,11 @@ function setLive_(dev, state, replace) {
 /* Properties (small shared state: the live timer, deletions, push)    */
 /* ================================================================== */
 
+// All properties are read once per request (one call instead of one per value)
+let PROPS_ = null;
 function getProp_(k) {
-  const v = PropertiesService.getScriptProperties().getProperty(k);
+  if (!PROPS_) PROPS_ = PropertiesService.getScriptProperties().getProperties();
+  const v = PROPS_[k];
   if (v == null || v === '') return null;
   try { return JSON.parse(v); } catch (e) { return null; }
 }
@@ -809,6 +862,7 @@ function getProp_(k) {
 function setProp_(k, v) {
   const p = PropertiesService.getScriptProperties();
   if (v == null) p.deleteProperty(k); else p.setProperty(k, JSON.stringify(v));
+  if (PROPS_) { if (v == null) delete PROPS_[k]; else PROPS_[k] = JSON.stringify(v); }
 }
 
 /* ================================================================== */
@@ -901,6 +955,7 @@ function setupReminders() {
 
 // Runs every 5 minutes (the trigger setupReminders creates)
 function checkAlerts() {
+  resetRequest_();
   const cfg = getProp_('push');
   if (!cfg) return;
   const subs = pushRows_().filter(r => r.status === 'On');
@@ -1099,6 +1154,7 @@ const DOUBLE_OVERLAP_MIN = 10;   // a piece starting this long before the previo
  * everything that was merged, dropped or left out.
  */
 function migrateToTabs() {
+  resetRequest_();
   return withLock_(() => {
     const ss = SpreadsheetApp.getActive();
     if (ss.getSheetByName(TABS.feed.name)) { Logger.log('Nothing to do: this sheet already has a Feeds tab.'); return ['already']; }
@@ -1135,6 +1191,7 @@ function migrateToTabs() {
     ensureTab_(DEVICES, DEV_HEADERS);
     ensureTab_(INVITES, INV_HEADERS);
     setProp_('migratedAt', Date.now());   // phones download everything again on their next sync
+    setProp_('revs', null);
 
     if (res.skipped.length) report.push('Left in "Log (archive)" only (no time, or an event the app does not know): rows ' + res.skipped.join(', '));
     report.unshift('Done. The ' + res.items.length + ' rows of the Log are now: ' + counts.join(', ') + '.');
@@ -1454,6 +1511,7 @@ function data_(sh) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
+  PROPS_ = null;   // read them fresh now that no other request can change them
   try { return fn(); } finally { lock.releaseLock(); }
 }
 

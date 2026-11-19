@@ -138,7 +138,36 @@ const ms = v => new Date(v).getTime();
   await P.click('#feedDone'); await settle();
   rows = (await tab('Feeds')).filter(r => r.Type === 'Breastfeed');
   check(rows.length === 3 && rows.some(r => r['Left min'] === 1 && r['Right min'] === 0), 'it is saved as a new feed');
+
+  // ---------- Opening the app shows that it is updating ----------
+  await fetch(BASE + '/__delay?ms=1500');
+  await P.reload(); await P.waitForSelector('#screen-home:not([hidden])');
+  await P.waitForTimeout(300);
+  const during = await P.getAttribute('#sync', 'data-state'), duringText = await P.textContent('#syncText');
+  const shownAt = await P.textContent('#timeline');
+  await P.waitForTimeout(2500);
+  check(during === 'refreshing' && duringText === 'Updating' && (await P.getAttribute('#sync', 'data-state')) === 'ok', 'while the app checks the sheet the pill says Updating, then Saved (' + during + ' ' + duringText + ')');
+  check(/Breastfeed/.test(shownAt), 'entries saved on the phone show right away, before the sheet answers');
+  await fetch(BASE + '/__delay?ms=0');
+  await P.waitForTimeout(21500);
+  check((await P.getAttribute('#sync', 'data-state')) === 'ok', 'background polls do not flash "Updating"');
   await browser.close();
+
+  // ---------- A poll when nothing changed reads nothing from the sheet ----------
+  const synced0 = (await post({ action: 'list', token })).syncedAt;
+  await fetch(BASE + '/__calls?reset=1');
+  const quiet = await post({ action: 'list', token, since: synced0 });
+  const qc = await (await fetch(BASE + '/__calls')).json();
+  check(quiet.ok && quiet.delta && quiet.entries.length === 0 && qc.sheet === 0 && qc.props <= 1, 'nothing changed: no sheet reads at all (' + JSON.stringify(qc) + ')');
+  await add({ type: 'diaper', t: Date.now(), kind: 'wet' });
+  await fetch(BASE + '/__calls?reset=1');
+  const one = await post({ action: 'list', token, since: synced0 });
+  const oc = await (await fetch(BASE + '/__calls')).json();
+  check(one.entries.length === 1 && one.entries[0].type === 'diaper' && oc.sheet <= 3, 'one new diaper: only the Diapers tab is read (' + JSON.stringify(oc) + ')');
+  await fetch(BASE + '/__calls?reset=1');
+  const delHint = await post({ action: 'delete', token, id: one.entries[0].id, type: 'diaper' });
+  const dc = await (await fetch(BASE + '/__calls')).json();
+  check(delHint.ok && !(await tab('Diapers')).some(r => r.ID === one.entries[0].id) && dc.sheet <= 6, 'a delete that says its type goes straight to that tab (' + JSON.stringify(dc) + ')');
 
   // ---------- Summary tabs read the entry tabs ----------
   st = await state();

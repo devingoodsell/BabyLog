@@ -14,6 +14,9 @@ const PORT = Number(process.argv[3] || 8787);
 const logs = [];
 
 /* ---------------- fake Sheets ---------------- */
+// How many sheet and property calls the script made (each is a slow round trip in real Apps Script)
+const calls = { sheet: 0, props: 0, cache: 0 };
+let delayMs = 0;   // /__delay?ms=1500 makes the script answer slowly, like real Apps Script
 class Range {
   constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr: nr || 1, nc: nc || 1 }); }
   getValue() { return this.getValues()[0][0]; }
@@ -28,6 +31,7 @@ class Range {
     return this;
   }
   getValues() {
+    calls.sheet++;
     const out = [];
     for (let i = 0; i < this.nr; i++) {
       const row = [];
@@ -40,10 +44,11 @@ class Range {
     return out;
   }
   setValues(vals) {
+    calls.sheet++;
     vals.forEach((row, i) => row.forEach((v, j) => this.sh.set(this.r + i, this.c + j, v)));
     return this;
   }
-  setValue(v) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, v); return this; }
+  setValue(v) { calls.sheet++; for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, v); return this; }
   setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
   setDataValidation() { return this; } setNumberFormat() { return this; } setNumberFormats() { return this; }
   setFontSize() { return this; } setHorizontalAlignment() { return this; }
@@ -60,20 +65,23 @@ class Sheet {
     }
     return new Range(this, r, c, nr, nc);
   }
-  getLastRow() { for (let i = this.rows.length; i > 0; i--) if ((this.rows[i - 1] || []).some(v => v !== '' && v != null)) return i; return 0; }
-  getLastColumn() { let m = 0; this.rows.forEach(r => r.forEach((v, j) => { if (v !== '' && v != null) m = Math.max(m, j + 1); })); return m; }
+  getDataRange() { calls.sheet++; return new Range(this, 1, 1, Math.max(1, this._lastRow()), Math.max(1, this._lastCol())); }
+  getLastRow() { calls.sheet++; return this._lastRow(); }
+  getLastColumn() { calls.sheet++; return this._lastCol(); }
+  _lastRow() { for (let i = this.rows.length; i > 0; i--) if ((this.rows[i - 1] || []).some(v => v !== '' && v != null)) return i; return 0; }
+  _lastCol() { let m = 0; this.rows.forEach(r => r.forEach((v, j) => { if (v !== '' && v != null) m = Math.max(m, j + 1); })); return m; }
   getMaxRows() { return this.maxRows; }
-  getMaxColumns() { return this.maxCols; }
+  getMaxColumns() { calls.sheet++; return this.maxCols; }
   insertColumnsAfter(after, n) { this.maxCols += n; }
   insertRowsAfter(after, n) { this.maxRows += n; }
-  appendRow(row) { const at = this.getLastRow(); this.rows.splice(at, this.rows.length - at, row.slice()); this.maxRows = Math.max(this.maxRows, at + 1); }
+  appendRow(row) { calls.sheet++; const at = this._lastRow(); this.rows.splice(at, this.rows.length - at, row.slice()); this.maxRows = Math.max(this.maxRows, at + 1); }
   deleteRow(r) { this.rows.splice(r - 1, 1); }
   setFrozenRows() {}
   setColumnWidths() {} setColumnWidth() {} setName(n) { this.name = n; return this; }
 }
 const sheets = [new Sheet('Sheet1')];   // a brand-new spreadsheet
 const ss = {
-  getSheetByName: n => sheets.find(s => s.name === n) || null,
+  getSheetByName: n => { calls.sheet++; return sheets.find(s => s.name === n) || null; },
   insertSheet: (n, i) => { const s = new Sheet(n); sheets.splice(i == null ? sheets.length : Math.min(i, sheets.length), 0, s); return s; },
   deleteSheet: (sh) => { const i = sheets.indexOf(sh); if (i >= 0) sheets.splice(i, 1); },
   getSheets: () => sheets,
@@ -98,9 +106,10 @@ Object.assign(global, {
     formatDate: (d, tz, fmt) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
   },
   PropertiesService: { getScriptProperties: () => ({
-    getProperty: k => (k in props ? props[k] : null),
-    setProperty: (k, v) => { props[k] = String(v); },
-    deleteProperty: k => { delete props[k]; }
+    getProperty: k => { calls.props++; return k in props ? props[k] : null; },
+    getProperties: () => { calls.props++; return Object.assign({}, props); },
+    setProperty: (k, v) => { calls.props++; props[k] = String(v); },
+    deleteProperty: k => { calls.props++; delete props[k]; }
   }) },
   ScriptApp: {
     getProjectTriggers: () => triggers,
@@ -114,7 +123,7 @@ Object.assign(global, {
     return { getContentText: () => JSON.stringify({ results }) };
   } },
   Session: { getScriptTimeZone: () => 'America/New_York' },
-  CacheService: { getScriptCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
+  CacheService: { getScriptCache: () => ({ get: k => { calls.cache++; return cache[k] || null; }, put: (k, v) => { calls.cache++; cache[k] = v; }, remove: k => { calls.cache++; delete cache[k]; } }) },
   LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
   ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
   Logger: { log: m => { logs.push(String(m)); console.log('[Logger]', m); } }
@@ -201,12 +210,12 @@ http.createServer((req, res) => {
   if (u.pathname === '/exec' && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
-    req.on('end', () => {
+    req.on('end', () => setTimeout(() => {
       const out = api.doPost({ postData: { contents: body } });
       try { const q = JSON.parse(body); if (q.action !== 'list' && q.action !== 'people') console.log('REQ', new Date().toISOString().slice(17,23), q.action, JSON.stringify(q.entry ? {id: q.entry.id.slice(0,6), note: q.entry.note} : {id: (q.id||'').slice(0,6), note: q.note}), '->', out.s.slice(0,80)); } catch (e) {}
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(out.s);
-    });
+    }, delayMs));
     return;
   }
   if (u.pathname === '/__state') {
@@ -230,6 +239,8 @@ http.createServer((req, res) => {
     req.on('end', () => { const q = JSON.parse(body); resetLegacy(q.rows, q.header); res.end('ok'); });
     return;
   }
+  if (u.pathname === '/__delay') { delayMs = Number(u.searchParams.get('ms')) || 0; res.end('ok'); return; }
+  if (u.pathname === '/__calls') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(calls)); if (u.searchParams.get('reset')) Object.keys(calls).forEach(k => { calls[k] = 0; }); return; }
   if (u.pathname === '/__invite') { res.end(logs.join('\n')); return; }
   if (u.pathname === '/__pushes') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(pushes)); return; }
   if (u.pathname === '/__pushResult') { pushResult = u.searchParams.get('gone') ? { ok: false, gone: true } : null; res.end('ok'); return; }

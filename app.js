@@ -5,7 +5,7 @@
   const CFG = window.BABYLOG_CONFIG || {};
   const MIN = 60000;
   const $ = id => document.getElementById(id);
-  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active', PREFS: 'bl.prefs', SYNC: 'bl.sync', LONG: 'bl.longAck' };
+  const K = { AUTH: 'bl.auth', ENTRIES: 'bl.entries', OUTBOX: 'bl.outbox', ACTIVE: 'bl.active', PREFS: 'bl.prefs', SYNC: 'bl.sync', FULL: 'bl.full', LONG: 'bl.longAck' };
 
   /* ================================================================ */
   /* Storage                                                           */
@@ -33,7 +33,23 @@
   const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   let installPrompt = null;
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // The app opens from the copy saved on the phone (instant, even offline) and downloads any new
+  // version in the background. When one is ready the app reloads itself at a quiet moment: right
+  // away if nothing is open, otherwise when the open sheet closes or the app goes to the background.
+  let reloadPending = false;
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; }   // first install: this page is already current
+      const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+      if (document.visibilityState === 'hidden' || (!openSheet && !typing)) location.reload();
+      else reloadPending = true;
+    });
+  }
+  function checkForUpdate() {
+    if (navigator.serviceWorker) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+  }
 
   /* ================================================================ */
   /* API                                                               */
@@ -74,7 +90,8 @@
   let flushing = false, online = true, lastSync = 0, refreshSoon = false, inflight = null;
   let localRev = 0;                         // goes up with every change made on this phone
   let syncedAt = load(K.SYNC, 0);           // server time of the last list, for change-only syncs
-  let lastFull = 0, polls = 0;
+  let lastFull = load(K.FULL, 0), polls = 0;   // when everything was last downloaded (hand edits show up then)
+  let showRefresh = false;                   // a refresh someone is waiting on: the sync pill says "Updating"
   const touch = () => { localRev++; };
   const opId = o => o.id || (o.entry && o.entry.id) || (o.op === 'live' ? 'live' : '');
 
@@ -84,6 +101,7 @@
     let state = 'ok', text = 'Saved';
     const stuck = outbox.some(o => o.tries);
     if (flushing) { state = 'saving'; text = 'Saving'; }
+    else if (showRefresh && online && !outbox.length) { state = 'refreshing'; text = 'Updating'; }
     else if (!online) { state = 'offline'; text = outbox.length ? 'Offline · ' + outbox.length + ' waiting' : 'Offline'; }
     else if (outbox.length) { state = stuck ? 'offline' : 'saving'; text = outbox.length + ' waiting'; }
     el.dataset.state = state;
@@ -102,7 +120,7 @@
       const e = entries.find(x => x.id === op.entry.id);
       if (e && !outbox.some(o => o !== op && opId(o) === e.id)) delete e.pending;
     } else if (op.op === 'note') {
-      await api('update', { id: op.id, note: op.note });
+      await api('update', { id: op.id, note: op.note, type: op.type });
     } else if (op.op === 'endSleep') {
       const r = await api('endSleep', { id: op.id, end: op.end, reopen: !!op.reopen });
       // Someone else woke him up first: their time stands
@@ -115,7 +133,7 @@
         toast((r.live.by || 'Someone') + ' already started a feed. You are now seeing that one.');
       }
     } else {
-      await api('delete', { id: op.id });
+      await api('delete', { id: op.id, type: op.type });
     }
   }
 
@@ -179,13 +197,17 @@
     }
   }
 
-  // Pulls entries from the sheet. Most polls ask only for what changed since the last one.
+  // Pulls entries from the sheet. Most polls ask only for what changed since the last one, which
+  // the sheet answers almost instantly when nothing did. `show` (opening the app, coming back to
+  // it, tapping the sync pill) turns the pill into "Updating" until the answer is in.
   let refreshing = null, again = false, againFull = false;
-  function refresh(full) {
+  function refresh(full, show) {
+    if (show && !showRefresh) { showRefresh = true; setSync(); }
     if (refreshing) { again = true; againFull = againFull || !!full; return refreshing; }
     refreshing = doRefresh(!!full).finally(() => {
       refreshing = null;
       if (again) { const f = againFull; again = false; againFull = false; setTimeout(() => refresh(f), 300); }
+      else if (showRefresh) { showRefresh = false; setSync(); }
     });
     return refreshing;
   }
@@ -225,7 +247,7 @@
       entries = (j.entries || []).filter(s => !pending.has(s.id)).concat(mine);
       const del = new Set(outbox.filter(o => o.op === 'delete').map(o => o.id));
       entries = entries.filter(e => !del.has(e.id));
-      lastFull = Date.now();
+      lastFull = Date.now(); store(K.FULL, lastFull);
     }
     // The shared breastfeed timer: the sheet's copy wins unless this phone has a change waiting
     // (An older script that does not share the timer sends no "live"; the timer then stays on this phone.)
@@ -287,7 +309,7 @@
     entries = entries.filter(x => x.id !== id);
     const add = pendingOp(id, 'add');
     outbox = outbox.filter(o => !(opId(o) === id && o !== inflight && o.op !== 'delete'));
-    if (!add) outbox.push({ op: 'delete', id: id });
+    if (!add) outbox.push({ op: 'delete', id: id, type: e && e.type });   // the type tells the sheet which tab to look in
     openItem = null;
     touch(); saveAll();
     if (e && !(opts && opts.quiet)) {
@@ -306,7 +328,7 @@
     if (add) add.entry.note = note;
     else {
       outbox = outbox.filter(o => !(o.op === 'note' && o.id === id && o !== inflight));
-      outbox.push({ op: 'note', id: id, note: note });
+      outbox.push({ op: 'note', id: id, note: note, type: e.type });
     }
     editingNote = null; openItem = null;
     touch(); saveAll();
@@ -564,7 +586,8 @@
     tl.textContent = '';
     if (!sorted.length) {
       const d = document.createElement('div'); d.className = 'empty';
-      d.textContent = lastSync || !online ? 'Nothing logged yet. Tap Breastfeed, Bottle or Diaper to add the first entry.' : 'Loading the log...';
+      if (lastSync || !online) d.textContent = 'Nothing logged yet. Tap Breastfeed, Bottle or Diaper to add the first entry.';
+      else d.append(h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Loading the log...');
       tl.appendChild(d);
     }
     let lastDay = new Date().toDateString();
@@ -667,6 +690,7 @@
     if (openSheet) openSheet.classList.remove('open');
     $('scrim').classList.remove('open'); openSheet = null;
     if (editing) endEdit();
+    if (reloadPending) location.reload();
   }
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => open(b.dataset.open)));
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
@@ -675,7 +699,7 @@
   $('liveSleep').addEventListener('click', () => open('sleep'));
   $('meBtn').addEventListener('click', () => open('settings'));
   $('statsBtn').addEventListener('click', () => open('stats'));
-  $('sync').addEventListener('click', () => { open('sync'); refresh(true); });
+  $('sync').addEventListener('click', () => { open('sync'); refresh(true, true); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
   /* Editing an entry: its sheet opens filled in, with "Save changes" */
@@ -1889,7 +1913,7 @@
       body.appendChild(list);
       body.appendChild(h('p', { class: 'muted', style: 'margin:0', text: 'Discard removes a change that will not go through. The sheet keeps whatever it already has.' }));
     }
-    body.appendChild(h('button', { class: 'secondary', type: 'button', text: 'Check for new entries', onclick: () => { refresh(true); toast('Checking for new entries'); } }));
+    body.appendChild(h('button', { class: 'secondary', type: 'button', text: 'Check for new entries', onclick: () => { refresh(true, true); toast('Checking for new entries'); } }));
   }
   function discardOp(o) {
     const k = outbox.indexOf(o);
@@ -2042,7 +2066,7 @@
     // A feed timer started on this phone before timers were shared: share it instead of losing it
     if (active && !active.id) { active.id = newId(); active.by = auth.name; saveActive(); queueLive(true); }
     render(); setSync();
-    refresh(true).then(maybeLongPrompt);
+    refresh(false, true).then(maybeLongPrompt);   // what's on the phone shows at once; this brings it up to date
   }
 
   /* ================================================================ */
@@ -2353,9 +2377,13 @@
     if (inviteCode) toast('This phone is already set up as ' + auth.name);
   } else showJoin('welcome');
 
-  setInterval(() => { if (auth && document.visibilityState === 'visible') refresh(); }, 45000);
+  setInterval(() => { if (auth && document.visibilityState === 'visible') refresh(); }, 20000);
   setInterval(render, 30000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && auth) refresh().then(maybeLongPrompt); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') { if (reloadPending) location.reload(); return; }
+    if (auth) refresh(false, true).then(maybeLongPrompt);
+    checkForUpdate();
+  });
   // Opened from a notification: show what it was about
   if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', ev => {
     if (!auth || !ev.data || ev.data.type !== 'notification') return;

@@ -96,6 +96,8 @@ header .date { color: var(--muted); font-weight: 600; font-size: 14px; }
 .sync i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .sync[data-state="saving"] i { background: var(--feed); animation: pulse 1s ease-in-out infinite; }
 .sync[data-state="offline"] i { background: var(--warn); }
+.sync[data-state="refreshing"] i { background: none; border: 2px solid var(--feed); border-top-color: transparent; width: 10px; height: 10px; box-sizing: border-box; animation: spin .8s linear infinite; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2.5px solid var(--feed); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px; margin-right: 8px; }
 .iconbtn { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--surface); box-shadow: var(--shadow); color: var(--ink); display: grid; place-items: center; flex: none; }
 .iconbtn svg { width: 20px; height: 20px; }
 /* Stats */
@@ -168,6 +170,7 @@ details.st-more summary::-webkit-details-marker { display: none; }
 .live svg { width: 18px; height: 18px; flex: none; }
 .stat.tap { border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; }
 @keyframes pulse { 50% { opacity: .35; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Status */
 .status { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

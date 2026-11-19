@@ -18,6 +18,7 @@ A phone app for logging a newborn's feeds, diapers, sleep, growth and health, sh
 - **Backdating** ("20 minutes ago" or an exact time) for entries logged after the fact.
 - **Reminders (optional):** notifications when a feed is due, when the breastfeed timer has run too long, or when the next dose of a medicine is due. Each person picks their own.
 - **Works offline:** entries wait on the phone and save when it reconnects. Tap the sync pill to see anything still waiting and why.
+- **Fast:** the app opens at once from the copy saved on the phone and shows what it already has, then the sync pill says **Updating** while it checks the sheet. While the app is open it checks every 20 seconds; the sheet only reads the tabs that changed, so a check when nothing happened takes almost no time.
 - Runs on iPhone, Android or any phone browser, and can be added to the Home Screen like an app. Nobody needs a Google account except the person who sets it up.
 
 ![Logging a syringe feed in mL, a pump session with amounts per side and a storage label, and the shared timeline with notes](docs/screenshots/logging.png)
@@ -307,7 +308,7 @@ There are two kinds of change, and they update differently.
 
 | You changed | How it reaches the phones |
 |---|---|
-| Anything except `apps-script/Code.gs` (screens, `config.js`, icons) | Commit to GitHub. Phones pick it up the next time the app is opened, or after it's closed and reopened. |
+| Anything except `apps-script/Code.gs` (screens, `config.js`, icons) | Commit to GitHub, and change `CACHE` at the top of `sw.js` (for example `babylog-v14` to `babylog-v15`). Each phone downloads the new version in the background and reloads onto it at a quiet moment: right away if nothing is open, otherwise when the open screen closes or the app goes to the background. Without the `CACHE` change, phones still get it, one opening later. |
 | `apps-script/Code.gs` | Paste the new code into Apps Script, save, then publish a **new version** (below). |
 
 **Publishing a new version of the script.** Saving the code isn't enough: the web app keeps running the copy it had when you last deployed. To update it:
@@ -339,7 +340,7 @@ What it does:
 
 ## Managing access
 
-- **Remove someone:** in the app, go to **Settings → People with access → Remove**. In the sheet, you can instead set their row's **Status** on the Devices tab to `Revoked`. Either way, that phone loses access on its next request.
+- **Remove someone:** in the app, go to **Settings → People with access → Remove**. That phone loses access on its next request. In the sheet, you can instead set their row's **Status** on the Devices tab to `Revoked`; that takes effect within 5 minutes, because the script remembers a phone's key for that long to answer faster.
 - **Cancel an unused invite:** remove it under People with access in the app.
 - **Sign out a phone:** on that phone, go to **Settings → Sign out of this phone**.
 - **Timing settings,** at the top of `Code.gs`:
